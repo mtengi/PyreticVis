@@ -5,3 +5,7 @@
 # Temporary files #
 ###################
 *.swp
+
+# GML files #
+#############
+*.gml
