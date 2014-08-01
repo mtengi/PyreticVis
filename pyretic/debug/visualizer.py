@@ -142,9 +142,8 @@ class VisConcreteNetwork(ConcreteNetwork):
         # maybe check for it later?
         try:
             self.topo_file = self.runtime.topo_file
-            print 'TOPO FILE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
         except:
-            print 'no topo_file!'
+            pass
         self.mininet = False
 
         # Continually read from the WebSocket.
@@ -229,9 +228,9 @@ class VisConcreteNetwork(ConcreteNetwork):
 
     def handle_switch_join(self, switch, **kwargs):
         super(VisConcreteNetwork,self).handle_switch_join(switch)
-        s = Switch("Switch %d" % switch)
-        for k,v in kwargs.iteritems():
-            setattr(s, k, v)
+        #s = Switch("Switch %d" % switch)
+        #for k,v in kwargs.iteritems():
+        #    setattr(s, k, v)
         #self.updates.append(("join", s))
         print 'handle switch join: %d' % switch
 
