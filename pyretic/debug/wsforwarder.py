@@ -1,7 +1,7 @@
 #!/usr/bin/python
 
 from tornado import websocket, web, httpserver, ioloop
-from threading import Thread
+from threading import Thread, Event
 import sys
 
 WS_PORT = 8181
@@ -42,6 +42,10 @@ class _ForwardHandler(websocket.WebSocketHandler):
 
 
 class _WSForwarder(Thread):
+    def __init__(self, ev):
+        self.ev = ev
+        super(_WSForwarder,self).__init__()
+
     def run(self):
         application = web.Application([
             (WS_PATH, _ForwardHandler),
@@ -49,12 +53,16 @@ class _WSForwarder(Thread):
         http_server = httpserver.HTTPServer(application)
         http_server.listen(WS_PORT)
         #print 'websocket forwarder starting on port %s' % WS_PORT
+        self.ev.set()
         ioloop.IOLoop.instance().start()
 
 def start_ws_forwarder():
-    t = _WSForwarder()
+    # The thread takes a little while to start, so use an event to signal that it's ready
+    ev = Event()
+    t = _WSForwarder(ev)
     t.daemon = True
     t.start()
+    ev.wait()
     return t
 
 if __name__ == '__main__':

@@ -166,6 +166,7 @@ class VisConcreteNetwork(ConcreteNetwork):
         self.thread.start()
 
     # Connect to the websocket forwarder. If it is down, try to restart it
+    # TODO: Don't try to restart the server. It shouldn't die
     def connect(self, second_try=False):
         try:
             ws = create_connection(WS_URL)
@@ -175,7 +176,6 @@ class VisConcreteNetwork(ConcreteNetwork):
         except socket.error:
             if not second_try:
                 start_ws_forwarder()
-                time.sleep(0.25) # In case the thread doesn't start immediately
                 return self.connect(True)
             else:
                 self.log.warn("Couldn't connect to WebSocket. Is forwarding server running?")

@@ -139,9 +139,6 @@ def main():
         print e
         sys.exit(1)
 
-    # Start websocket forwarder
-    start_ws_forwarder()
-
     main = module.main
     kwargs = { k : v for [k,v] in [ i.lstrip('--').split('=') for i in kwargs_to_pass ]}
 
@@ -181,6 +178,10 @@ def main():
     handler = util.QueueStreamHandler(logging_queue)
     logger.addHandler(handler)
     logger.setLevel(log_level)
+
+
+    # Start websocket forwarder
+    start_ws_forwarder()
     
     runtime = Runtime(Backend(),main,kwargs,options.mode,options.verbosity)
     if not options.frontend_only:
