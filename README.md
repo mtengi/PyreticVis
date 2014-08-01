@@ -22,3 +22,8 @@ in the project's root folder, which uses port 8000. My mininet VM is at
 http://192.168.56.101:8000/force/force.html. Note that you must refresh this
 webpage after running pyreticVis.py, since pyreticVis.py initiates the
 communication channel with the browser.
+
+
+Dependencies:
+websocket-client (https://github.com/liris/websocket-client)
+tornado (http://www.tornadoweb.org/en/stable/)

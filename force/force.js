@@ -1,4 +1,5 @@
 /*TODO
+0. Sort nodes so that switches are on top
 1. Right click menu
 2. Keep nodes within bounds (1.5x width?)
 3. Write method to handle changing properties of links/nodes
@@ -46,8 +47,6 @@ var drag = d3.behavior.drag()
     .on("dragend", dragend);
 
 function dragstart(d) {
-    console.log(d3.event);
-    EV = d3.event;
     d3.event.sourceEvent.stopPropagation();
     force.stop();
     d3.select(this).classed("fixed", d.fixed = true);

@@ -30,13 +30,14 @@ class NetVis():
            print n
 
 
-class Link():
+class Link(object):
     def __init__(self, name, nodes = (None, None), status = 'connected', capacity = None):
         self.name = name
         self.status = status
         self.capacity = capacity
         self.nodes = nodes
 
+        # A link must be made between two existing 
         if not self.nodes[0] or not self.nodes[1] or len(self.nodes) != 2:
             raise Exception # TODO: handle this better
 
@@ -56,23 +57,29 @@ class Link():
 
 
 class Node(object):
-    def __init__(self, name):
-        self.name = name
+    def __init__(self, **opts):
+        self.id = id(self) # Maybe a little too hacky?
+        # A dictionary of the form { port_no : Link }
+        self.links = {}
 
-    def add_to(self, graph):
-        graph.add_edge(self, name = self.name)
+        # Allow arbitrary data on the Node
+        for k,v in opts.iteritems():
+            setattr(self, k, v)
+
+    def add_link(self, link, port_no):
+        if link == null:
+            self.links.pop(port_no)
+        else:
+            self.links[port_no] = link
+
+    def set_prop(self, prop, value):
+        setattr(self, prop, value)
 
     def __repr__(self):
         return str(id(self))
 
     def __str__(self):
         return repr(self)
-
-# I don't know if this is necessary
-class Egress(Node):
-    def __init__(self, name, link = None):
-        super(Egress, self).__init__(name)
-        self.link = link
 
 
 class Switch(Node):
@@ -198,7 +205,6 @@ class VisConcreteNetwork(ConcreteNetwork):
 
     def update_topo(self, topo):
         self.curr_topo = topo
-        print 'update: %s' % str(self.updates)
         if not self.ws:
             return
 
@@ -266,7 +272,6 @@ class VisConcreteNetwork(ConcreteNetwork):
     def build_from(self, topo):
         g = nx.Graph()
         for n in topo.node:
-            print n
             g.add_node(n, name = 'Switch %s' % n, node_type = 'switch')
             for p in topo.node[n]['ports']:
                 port = topo.node[n]['ports'][p]

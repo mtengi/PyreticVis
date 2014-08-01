@@ -11,6 +11,12 @@ _clients = []
 
 # Every time a client connects to the server, one of these is spawned
 class _ForwardHandler(websocket.WebSocketHandler):
+
+    # Needed for Tornado 4.0: overrides origin check
+    # TODO: actually do this correctly
+    def check_origin(self, origin):
+        return True
+
     def open(self):
         if len(_clients) >= 2:
             #print "got additional client request"
