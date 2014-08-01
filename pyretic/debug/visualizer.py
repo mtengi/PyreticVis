@@ -32,22 +32,27 @@ class NetVis():
 
 class Link(object):
     def __init__(self, name, nodes = (None, None), status = 'connected', capacity = None):
+        self.id = id(self)
+
         self.name = name
         self.status = status
         self.capacity = capacity
         self.nodes = nodes
 
-        # A link must be made between two existing 
+        # A link must be made between two existing Nodes. 
         if not self.nodes[0] or not self.nodes[1] or len(self.nodes) != 2:
             raise Exception # TODO: handle this better
 
         if not self.status == 'connected' or self.status == 'disconnected':
             raise Exception # TODO: same as above
 
-    def add_to(self, graph):
-        self.nodes[0].add_to(graph) # Will have no effect if node is already in graph
-        self.nodes[1].add_to(graph)
-        graph.add_edge(self, name = self.name, status = self.status, capacity = self.capacity) #MORE
+    def connect(self):
+        self.status = up
+
+    def disconnect(self):
+        self.status = down
+
+
 
     def __repr__(self):
         return id(self)
@@ -189,7 +194,10 @@ class VisConcreteNetwork(ConcreteNetwork):
                 pass
             else:
                 #self.initialize_from_topo(net.topology)
-                self.update_topo(self.curr_topo)
+                if not self.curr_topo:
+                    self.log.warn("No topology found. Do you have a network running?")
+                else:
+                    self.update_topo(self.curr_topo)
             
         else:
             self.log.warn('Unrecognized message from browser: %s' % msg)
