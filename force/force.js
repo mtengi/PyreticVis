@@ -1,24 +1,65 @@
 /*TODO
-0. Sort nodes so that switches are on top
 1. Right click menu
 2. Keep nodes within bounds (1.5x width?)
 3. Write method to handle changing properties of links/nodes
 4. Differentiate links/nodes by something other than name (like a unique id)
 5. Ctrl-click to un-fix nodes
-
+6. Wrap long labels
 */
+
+var ws;
+
+$('document').ready(function() {
+    var host = window.location.hostname;
+    var url = "ws://" + host + ":8181/ws"
+    ws = new WebSocket(url);
+
+    ws.onmessage = function (event) {
+        console.log(event.data);
+        json = jQuery.parseJSON(event.data);
+        process_message(json)
+    };
+
+    ws.onopen = get_current_state
+});
+
+function get_current_state() {
+    ws.send('initialize');
+}
+
+function process_message(json) {
+    switch (json.message_type) {
+        case undefined:
+            console.log('WARNING: No message_type found. Discarding message');
+            break;
+        case 'network':
+            network(json);
+            break;
+        case 'update':
+            update(json);
+            break;
+        default:
+            console.log('WARNING: Unrecognized message_type: ' + json.message_type + '. Discarding message');
+            break;
+    }
+}
+
 // Allow the content to fill the window with no scrollbars or borders
 $("body").attr("style", "overflow: hidden; margin: 0px; display: flex");
 
+//Allow an element to be moved to the front (like when dragging a node)
+d3.selection.prototype.moveToFront = function() { 
+  return this.each(function() { 
+      this.parentNode.appendChild(this); 
+    }); 
+};
+
 var w, h, boxw, boxh;
-function calc() {
-    w = $(window).width(),
-      h = $(window).height(), 
-      boxw = 100,
-      boxh = 40;
-}
 
 calc();
+
+//a flag so that we don't zoom when double clicking nodes
+var _on_node = false;
 
 // Deal with panning and zooming
 var zoom = d3.behavior.zoom()
@@ -26,8 +67,52 @@ var zoom = d3.behavior.zoom()
     .scaleExtent([.25,2])
     .on("zoom", zoomed); 
 
+//Defines what happens when dragging around nodes
+var drag = d3.behavior.drag()
+    .origin(function(d) { return d; })
+    .on("dragstart", dragstart)
+    .on("drag", dragged)
+    .on("dragend", dragend);
+
+var svg = d3.select("body").append("svg")
+    .attr("width", w)
+    .attr("height", h)
+    .call(zoom)
+    .on("dblclick.zoom", null); //for now: disable double clicking entirely
+
+
+var rect = svg.append("rect")
+    .attr("width", w)
+    .attr("height", h)
+    .style("fill", "none")
+    .style("pointer-events", "all");
+
+//the <g> tag containing the whole visualization. This gets zoomed and panned
+var vis = svg.append("g");
+
+//do this so that nodes will always render on top of links
+vis.append("g").attr("id", "links");
+vis.append("g").attr("id", "nodes");
+
+//set the force layout to be centered in the screen
+zoom.translate([w/2, h/2]);
+zoom.event(vis);
+
+var force = d3.layout.force()
+    .gravity(0.01)
+    .size([1,1])
+    .charge(-1000)
+    .chargeDistance(1000)
+    .charge(function(d) {return (d.node_type == "switch") ? -800 : -1200;})
+    .linkDistance(300);
+
 // called anytime the user zooms or pans
 function zoomed(d) {
+    //if we got here because a node was double clicked, don't do anything
+    if (_on_node) {
+        _on_node = false;
+        return;
+    }
     trans = d3.event.translate;
     scale = d3.event.scale;
     x=trans[0];
@@ -39,18 +124,12 @@ function zoomed(d) {
     vis.attr("transform", "translate(" + [x,y] + ")scale(" + scale + ")");
 };
 
-//Defines what happens when dragging around nodes
-var drag = d3.behavior.drag()
-    .origin(function(d) { return d; })
-    .on("dragstart", dragstart)
-    .on("drag", dragged)
-    .on("dragend", dragend);
-
 function dragstart(d) {
     d3.event.sourceEvent.stopPropagation();
     force.stop();
     d3.select(this).classed("fixed", d.fixed = true);
     d3.select(this).classed("dragging", true);
+    d3.select(this).moveToFront();
 };
 
 //This is needed to make sure that the layout updates correctly while dragging.
@@ -61,6 +140,8 @@ function dragged(d) {
     d.x += d3.event.dx;
     d.y += d3.event.dy;
     tick();
+    
+    //addition: if node is dragged off screen, call zoom.translate; zoom.event
 };
 
 function dragend(d) {
@@ -70,42 +151,18 @@ function dragend(d) {
 };
 
 function dblclick(d) {
+    _on_node = true;
     d3.event.preventDefault();
     d3.select(this).classed("fixed", d.fixed = false);
 }
-
-var svg = d3.select("body").append("svg")
-    .attr("width", w)
-    .attr("height", h)
-    .call(zoom);
-
-var rect = svg.append("rect")
-    .attr("width", w)
-    .attr("height", h)
-    .style("fill", "none")
-    .style("pointer-events", "all");
-
-//the <g> tag containing the whole visualization. This gets zoomed and panned
-var vis = svg.append("g");
-
-//set the force layout to be centered in the screen
-zoom.translate([w/2, h/2]);
-zoom.event(vis);
-
-var force = d3.layout.force()
-    .gravity(0.01)
-    .size([1,1])
-    .charge(-1000)
-    .chargeDistance(1000)
-    //.charge(function(d) {return (d.node_type == "switch") ? -800 : -1200;})
-    .linkDistance(300);
 
 //These are the nodes and links which existed before the json arrived
 //This allows us to keep track of the links that were already in the layout (especially their positions)
 var existing_nodes = [];
 var existing_links = [];
 
-function update(json) {
+//when we get a new network topology, process it
+function network(json) {
 
     //Update json.links and json.nodes:
     //If a link/node is already in existing_links/nodes (i.e. it was in the layout already),
@@ -114,43 +171,67 @@ function update(json) {
 
     //Currently differentiates objects by name, but this should probably change
 
-    ex_link_names = Object();
+    function copy_d3_props(from, to) {
+        to.index = from.index;
+        to.x = from.x;
+        to.y = from.y;
+        to.px = from.px;
+        to.py = from.py;
+        to.fixed = from.fixed;
+        to.weight = from.weight;
+    }
+
+    function copy_not_d3_props(from, to) {
+        for (prop in from) {
+            to[prop] = from[prop];
+        }
+    }
+
+    ex_link_ids = Object();
     existing_links.forEach(
         function(val, ind) {
-            ex_link_names[val.name] = val;
+            ex_link_ids[val.id] = val;
         }
     );
 
     for (i = 0; i < json.links.length; i++) {
-        name = json.links[i].name;
-        if (name in ex_link_names) {
-            json.links[i] = ex_link_names[name];
+        id = json.links[i].id;
+        if (id in ex_link_ids) {
+            copy_not_d3_props(json.links[i], ex_link_ids[id]);
+            json.links[i] = ex_link_ids[id];
+            //copy_d3_props(ex_link_ids[id], json.links[i]);
         }
     }
     
-    ex_node_names = Object();
+    ex_node_ids = Object();
     existing_nodes.forEach(
         function(val, ind) {
-            ex_node_names[val.name] = val;
+            ex_node_ids[val.id] = val;
         }
     );
 
     for (i = 0; i < json.nodes.length; i++) {
-        name = json.nodes[i].name;
-        if (name in ex_node_names) {
-            json.nodes[i] = ex_node_names[name];
+        id = json.nodes[i].id;
+        if (id in ex_node_ids) {
+            copy_not_d3_props(json.nodes[i], ex_node_ids[id]);
+            json.nodes[i] = ex_node_ids[id];
+            //copy_d3_props(ex_node_ids[id], json.nodes[i]);
         }
     }
 
-    linkgroup = vis.selectAll(".linkgroup")
-        .data(json.links, function(d) { return d.name;});
+    linkgroup = vis.select("#links").selectAll(".linkgroup")
+        .data(json.links, function(d) { return d.id;});
+
+    linkgroup
+        .select("line")
+        .attr("class", function(d) { return "link " + d.status; });
 
     linkgroup
         .exit()
         .remove()
         .each(function(d) {
             for (i = 0; i < existing_links.length; i++) {
-                if (existing_links[i].name == d.name) {
+                if (existing_links[i].id == d.id) {
                     existing_links.splice(i, 1);
                 }
             }
@@ -163,7 +244,7 @@ function update(json) {
         .each(function(d) { existing_links.push(d); });
         
     link.append("svg:line")
-        .attr("class", "link")
+        .attr("class", function(d) { return "link " + d.status; })
         .style("stroke-width", 5)
         .attr("x1", function(d) { return d.source.x; })
         .attr("y1", function(d) { return d.source.y; })
@@ -173,15 +254,15 @@ function update(json) {
     link.append("text")
         .text(function(d) { return d.name; });
 
-    nodegroup = vis.selectAll(".nodegroup")
-        .data(json.nodes, function(d) { return d.name;});
+    nodegroup = vis.select("#nodes").selectAll(".nodegroup")
+        .data(json.nodes, function(d) { return d.id;});
     
     nodegroup
         .exit()
         .remove()
         .each(function(d) {
             for (i = 0; i < existing_nodes.length; i++) {
-                if (existing_nodes[i].name == d.name) {
+                if (existing_nodes[i].id == d.id) {
                     existing_nodes.splice(i, 1);
                 }
             }
@@ -202,7 +283,7 @@ function update(json) {
         .each(function(d) { existing_nodes.push(d); });
 
     node.append("svg:rect")
-        .attr("class", "node")
+        .attr("class", function(d) { return "node " + d.node_type; })
         .attr("width", boxw)
         .attr("height", boxh)
         .attr("x", -boxw / 2)
@@ -210,7 +291,6 @@ function update(json) {
         .attr("rx", 5)
         .attr("ry", 5)
         .style("cursor", "move")
-        .style("fill", function(d) {return (d.node_type === "switch") ? "blue" : (d.node_type === "egress") ? "green" : "red";});
 
     node.append("text")
         .text(function(d) { return d.name; })
@@ -219,14 +299,28 @@ function update(json) {
         .style("cursor", "move")
         .attr("x", function(d) { return (0); })
         .attr("y", function(d) { return (0); });
+
+    //Very crude. Just generally gets switches to the front
+    node.sort(function(a,b) {return a.node_type == "switch" ? 1 : 0;});
     
     force
         .links(json.links)
         .nodes(json.nodes)
         .on("tick", tick)
         .start();
+}
 
-};
+function update(json) {
+    update_type = json['update_type'];
+    switch(json.update_type) {
+        case undefined:
+            console.log('update_type undefined. What are you updating?');
+            break;
+        case 'node':
+            break;
+    }
+
+}
 
 function tick(e) {
     //k = 60 * e.alpha;
@@ -258,22 +352,6 @@ function tick(e) {
         .attr("transform", function (d) { return "translate(" + d.x + ", " + d.y + ")"; });
 }
 
-function process_message(json) {
-    switch (json.message_type) {
-        case undefined:
-            console.log('WARNING: No message_type found. Discarding message');
-            break;
-        case 'network':
-            update(json);
-            break;
-        case 'update':
-            update(json);
-            break;
-        default:
-            console.log('WARNING: Unrecognized message_type: ' + json.message_type + '. Discarding message');
-            break;
-    }
-}
 
 window.onresize = function () {
     calc();
@@ -283,34 +361,11 @@ window.onresize = function () {
     
     rect.attr("width", w)
         .attr("height", h);
-
-    /*nodegroup.select("rect")
-        .data(json.nodes)
-        .attr("width", boxw)
-        .attr("height", boxh);*/
-
-    //force.size([w, h])
-        //.linkDistance(1.5 * Math.sqrt((boxw * boxw) + (boxh * boxh)))
-    //    .start();
-
 }
 
-var ws;
-
-$('document').ready(function() {
-    var host = window.location.hostname;
-    var url = "ws://" + host + ":8181/ws"
-    ws = new WebSocket(url);
-
-    ws.onmessage = function (event) {
-        console.log(event.data);
-        json = jQuery.parseJSON(event.data);
-        process_message(json)
-    };
-
-    ws.onopen = get_current_state
-});
-
-function get_current_state() {
-    ws.send('initialize');
+function calc() {
+    w = $(window).width(),
+      h = $(window).height(), 
+      boxw = 100,
+      boxh = 40;
 }

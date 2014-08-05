@@ -3,9 +3,25 @@ rect.node {
     stroke-width: 1.5px;
 }
 
+rect.node.switch {
+    fill: lightblue;
+}
+
+rect.node.host {
+    fill: green;
+}
+
 line.link {
-    stroke: #999;
     stroke-opacity: .6;
+    stroke: green;
+}
+
+line.link.up {
+    stroke: gray;
+}
+
+line.link.down {
+    stroke: red;
 }
 
 text {
