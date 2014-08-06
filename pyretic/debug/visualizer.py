@@ -83,6 +83,12 @@ class Link(object):
 
 
 class Node(object):
+    host_num = 0
+    @classmethod
+    def next_host_num(cls):
+        cls.host_num += 1
+        return cls.host_num
+
     def __init__(self, net, name = None, node_type = 'switch', uid = None, **props):
         self.props = props
         self.set_prop('id', uid or id(self))
@@ -150,6 +156,9 @@ class Node(object):
 
     def get_props(self):
         return self.props.copy()
+
+    def is_host(self):
+        return self.get_prop('node_type') == 'host'
 
     def __repr__(self):
         return self.get_prop('name')
@@ -251,8 +260,6 @@ class VisConcreteNetwork(ConcreteNetwork):
             pass
         self.mininet = False
 
-        self.curr_topo=None
-
         self.net = Network(option1 = True)
 
 
@@ -273,8 +280,7 @@ class VisConcreteNetwork(ConcreteNetwork):
         self.thread.daemon = True
         self.thread.start()
 
-    # Connect to the websocket forwarder. If it is down, try to restart it
-    # TODO: Don't try to restart the server. It shouldn't die
+    # Connect to the websocket forwarder
     def connect(self):
         try:
             ws = create_connection(WS_URL)
@@ -287,18 +293,11 @@ class VisConcreteNetwork(ConcreteNetwork):
 
     # Process incoming messages
     def process_message(self, msg):
-        if msg == 'initialize':
+        if msg == 'current_network':
             if self.mininet:
-                #self.initialize_from_mininet()
                 pass
             else:
-                #self.initialize_from_topo(net.topology)
-                if not self.curr_topo:
-                    # If running with -t TOPO_FILE argument and xterm doesn't start, we might run into this
-                    self.log.warn("No topology found. Do you have a network running?")
-                else:
-                    self.update_topo(self.curr_topo)
-            
+                self.send_network()
         else:
             self.log.warn('Unrecognized message from browser: %s' % msg)
 
@@ -310,17 +309,13 @@ class VisConcreteNetwork(ConcreteNetwork):
             return
         self.ws.send(msg)
 
-    # NO. this is bad and should be dealt with differently
-    def update_topo(self, topo):
-        self.curr_topo = topo
-        if not self.ws:
-            return
-
+    def send_network(self):
         d = json_graph.node_link_data(self.net.to_nx_graph())
         d['message_type'] = 'network'
-        self.ws.send(json.dumps(d))
+        self.send_to_ws(json.dumps(d))
 
-    # Override (but maybe not needed in merged class?)
+    # This should be used to transition to next network
+    # Also has to push changes to browser
     def queue_update(self,this_update_no):
         def f(this_update_no):
             time.sleep(self.wait_period)
@@ -330,7 +325,7 @@ class VisConcreteNetwork(ConcreteNetwork):
 
             self.topology = self.next_topo.copy()
             self.runtime.handle_network_change()
-            self.update_topo(self.topology)
+            self.send_network()
 
         p = threading.Thread(target=f,args=(this_update_no,))
         p.start()
@@ -340,6 +335,8 @@ class VisConcreteNetwork(ConcreteNetwork):
 # Still need some work on what methods do exactly what
 # Problem: Can't currently bring up a link to a host because port_up and handle_port_join are called
 # When network is initialized, handle_port_join is called, and this makes the host node
+
+#TODO: deal with deleting fake hosts better
 
     # Make a new Node
     def handle_switch_join(self, switch, **kwargs):
@@ -354,6 +351,7 @@ class VisConcreteNetwork(ConcreteNetwork):
 
     # When a port comes up, we can assume that it's connected to a host (not
     # tracked by Pyretic)
+    # TODO: figure out how to get mininet's host number (probably related to order brought up)
     def handle_port_join(self, switch, port_no, config, status):
         super(VisConcreteNetwork,self).handle_port_join(switch, port_no, config, status)
         node1 = Node(self.net, node_type = 'host')
@@ -366,6 +364,7 @@ class VisConcreteNetwork(ConcreteNetwork):
         self.net.get_node(switch).port_part(port_no)
         print 'handle port part: %d %d' % (switch, port_no)
 
+    # This is called when bringing ports up and down. Use this for host up/down
     def handle_port_mod(self, switch, port_no, config, status):
         super(VisConcreteNetwork,self).handle_port_mod(switch, port_no, config, status)
         print 'handle port mod: %d %d %s %s' % (switch, port_no, config, status)
@@ -381,9 +380,11 @@ class VisConcreteNetwork(ConcreteNetwork):
             self.net.get_node(switch).port_down(port_no)
         print 'port down: %d %d %s' % (switch, port_no, double_check)
 
-    # Called when a link comes up. Delete the assumed hosts
+    # Called when a link comes up. Delete the assumed hosts (TODO actually implement deletion)
     def handle_link_update(self, s1, p_no1, s2, p_no2):
         super(VisConcreteNetwork,self).handle_link_update(s1, p_no1, s2, p_no2)
+        if self.net.get_node(s1) and self.net.get_node(s1).is_host():
+            pass #delete
         Link(self.net, self.net.get_node(s1), p_no1, self.net.get_node(s2), p_no2)
         print 'handle link update: %d %d %d %d' % (s1, p_no1, s2, p_no2)
 

@@ -24,7 +24,7 @@ $('document').ready(function() {
 });
 
 function get_current_state() {
-    ws.send('initialize');
+    ws.send('current_network');
 }
 
 function process_message(json) {
@@ -308,6 +308,17 @@ function network(json) {
         .nodes(json.nodes)
         .on("tick", tick)
         .start();
+
+
+    function dfs() {
+        json.nodes.forEach(function(d) { d.seen = false; d.level = 0; });
+
+        json.nodes.forEach(function(d, i) {
+            if (d.node_type == 'host') {
+                ;
+            }
+        });
+    }
 }
 
 function update(json) {
@@ -322,12 +333,19 @@ function update(json) {
 
 }
 
-function tick(e) {
+function tick() {
     //k = 60 * e.alpha;
 
     /*node.forEach(function(d, i) {
         d.y += d.node_type === "switch" ? k : -k;
     });*/
+
+    a=force.alpha();
+
+    json.links.forEach(function(d,i) {
+        //d.source.y -= 10 * a;
+        //d.target.y += 10 * a;
+    });
 
     linkgroup.select("line")
         .attr("x1", function(d) { return d.source.x; })
@@ -351,7 +369,6 @@ function tick(e) {
     nodegroup
         .attr("transform", function (d) { return "translate(" + d.x + ", " + d.y + ")"; });
 }
-
 
 window.onresize = function () {
     calc();
