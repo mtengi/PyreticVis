@@ -4,6 +4,7 @@
 # The Pyretic Project                                                          #
 # frenetic-lang.org/pyretic                                                    #
 # author: Joshua Reich (jreich@cs.princeton.edu)                               #
+# modified by: Mark Tengi (markat@princeton.edu)
 ################################################################################
 # Licensed to the Pyretic Project by one or more contributors. See the         #
 # NOTICES file distributed with this work for additional information           #
@@ -31,7 +32,6 @@
 from pyretic.core.runtime import Runtime
 from pyretic.backend.backend import Backend
 import sys
-import threading
 import signal
 import subprocess
 from importlib import import_module
@@ -50,9 +50,12 @@ import pyretic.core.util as util
 # entire ConcreteNetwork class
 ################################################################################
 from pyretic.core import runtime
-from pyretic.debug.visualizer import VisConcreteNetwork
+from pyretic.debug.visualizer import VisConcreteNetwork, VisCountBucket
 from pyretic.debug.wsforwarder import start_ws_forwarder
-import networkx
+
+from pyretic.lib.corelib import *
+from pyretic.lib.std import *
+from pyretic.lib.query import *
 
 # Overwrite the ConcreteNetwork class so that it'll do our bidding
 runtime.ConcreteNetwork = VisConcreteNetwork
@@ -60,13 +63,20 @@ runtime.ConcreteNetwork = VisConcreteNetwork
 ################################################################################
 
 of_client = None
+network = None
 
 def signal_handler(signal, frame):
+    # 
+    #if network.sigint():
+    #    return
     print '\n----starting pyretic shutdown------'
     # for thread in threading.enumerate():
     #     print (thread,thread.isAlive())
     print "attempting to kill of_client"
     of_client.kill()
+
+    network.stop()
+    
     # print "attempting get output of of_client:"
     # output = of_client.communicate()[0]
     # print output
@@ -100,6 +110,8 @@ def parseArgs():
                    choices=['low','normal','high','please-make-it-stop'],
                    default = 'low',
                    help = '|'.join( ['low','normal','high','please-make-it-stop'] )  )
+
+    # Add option to specify a topology file
     op.add_option( '--topo-file', '-t', type='string', action='store',
                    dest='topo_file', help='biuld and run a topology from the given GML file' )
 
@@ -108,9 +120,8 @@ def parseArgs():
 
     return (op, options, args, kwargs_to_pass)
 
-
 def main():
-    global of_client
+    global of_client, network
     (op, options, args, kwargs_to_pass) = parseArgs()
     if options.mode == 'i':
         options.mode = 'interpreted'
@@ -179,11 +190,36 @@ def main():
     logger.addHandler(handler)
     logger.setLevel(log_level)
 
+    # Check for root. Mininet requires root and will complain if we're not
+    if options.topo_file and os.getuid() != 0:
+        print 'Running in Mininet mode requies root'
+        exit(1)
+
 
     # Start websocket forwarder
     start_ws_forwarder()
     
-    runtime = Runtime(Backend(),main,kwargs,options.mode,options.verbosity)
+    # Start the Runtime with a policy that forwards all packets to us
+    given_pol = main(**kwargs)
+    fwd = FwdBucket()
+    cb = VisCountBucket()
+    cb.add_match(identity)
+
+    pol = lambda: fwd + cb + given_pol
+
+    runtime = Runtime(Backend(),pol,{},options.mode,options.verbosity)
+
+    # This is our VisConcreteNetwork
+    network = runtime.network
+
+    # Every packet through the network will be pushed to the handle_pkt function
+    fwd.register_callback(network.handle_pkt)
+    
+    cb.register_vcn(network)
+    network.orig_policy = given_pol
+
+    print runtime.policy.compile()
+
     if not options.frontend_only:
         try:
             output = subprocess.check_output('echo $PYTHONPATH',shell=True).strip()
@@ -208,28 +244,25 @@ def main():
                                      stdout=sys.stdout,
                                      stderr=subprocess.STDOUT)
 
+    signal.signal(signal.SIGINT, signal_handler)
+
     # Open a new xterm that will build a topology from the given file and then enter the mininet CLI
     if options.topo_file:
-        try:
-            subprocess.Popen(("xterm -e sudo python pyretic/debug/mn.py %s" % options.topo_file).split())
-            runtime.topo_file = options.topo_file #this won't work b/c constructor was already called
-            from multiprocessing import Pipe
-            from pyretic.debug import mn
-            #cli_in, shell_out = Pipe()
-            #subprocess.Popen('xterm'.split(),stdout=subprocess.PIPE)
-            #import time
-            #p=Process(target=mn.main, args=(cli_in,options.topo_file))
-            #p.start()
+        #subprocess.Popen(("xterm -e sudo python pyretic/debug/mn.py %s" % options.topo_file).split())
+        from multiprocessing import Pipe
+        from pyretic.debug import mn
+        #cli_in, shell_out = Pipe()
+        #subprocess.Popen('xterm'.split(),stdout=subprocess.PIPE)
+        #import time
+        #p=Process(target=mn.main, args=(options.topo_file, network))
+        #p.start()
 
-            #mn.main(open("test.txt", 'r'), options.topo_file)
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            signal_handler(None, None)
+        mn.main(options.topo_file, network)
+        #signal.pause()
+        signal_handler(None, None)
 
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.pause()
+    else:
+        signal.pause()
 
 
 if __name__ == '__main__':

@@ -1,15 +1,18 @@
 /*TODO
-1. Right click menu
+1. Make split pane on the left for info and stuff
 2. Keep nodes within bounds (1.5x width?)
 3. Write method to handle changing properties of links/nodes
-4. Differentiate links/nodes by something other than name (like a unique id)
 5. Ctrl-click to un-fix nodes
 6. Wrap long labels
 */
 
 var ws;
+var mininet = false;
+var interval = 0;
 
-$('document').ready(function() {
+$('document').ready(connect);
+
+function connect() {
     var host = window.location.hostname;
     var url = "ws://" + host + ":8181/ws"
     ws = new WebSocket(url);
@@ -20,12 +23,20 @@ $('document').ready(function() {
         process_message(json)
     };
 
-    ws.onopen = get_current_state
-});
+    ws.onopen = function () {
+        d3.select("#no_ws").attr("hidden", '');
+        ws.send('current_network');
+        ws.send('port_stats_request');
+        interval = setInterval(function() {ws.send('port_stats_request');}, 2000);
+    };
 
-function get_current_state() {
-    ws.send('current_network');
+    ws.onclose = function () {
+        d3.select("#no_ws").attr("hidden", null);
+        setTimeout(connect, 5000);
+        if (interval) { clearInterval(interval); }
+    };
 }
+
 
 function process_message(json) {
     switch (json.message_type) {
@@ -33,19 +44,19 @@ function process_message(json) {
             console.log('WARNING: No message_type found. Discarding message');
             break;
         case 'network':
-            network(json);
+            handle_network(json);
             break;
-        case 'update':
-            update(json);
+        case 'packet':
+            handle_packet(json);
+            break;
+        case 'port_stats_reply':
+            handle_port_stats_reply(json);
             break;
         default:
             console.log('WARNING: Unrecognized message_type: ' + json.message_type + '. Discarding message');
             break;
     }
 }
-
-// Allow the content to fill the window with no scrollbars or borders
-$("body").attr("style", "overflow: hidden; margin: 0px; display: flex");
 
 //Allow an element to be moved to the front (like when dragging a node)
 d3.selection.prototype.moveToFront = function() { 
@@ -54,38 +65,44 @@ d3.selection.prototype.moveToFront = function() {
     }); 
 };
 
-var w, h, boxw, boxh;
+link_context_options =
+[
+    { name : 'Bring down', fn : link_down, mininet_only : true },
+    { name : 'Bring up', fn : link_up, mininet_only : true },
+]
+
+node_context_options = [
+    { name : 'Rename', fn : node_rename }, //Doesn't currently do anything
+    { name : 'Start xterm', fn : node_xterm, mininet_only : true },
+]
+
+
+//Structure
+var sidebar = d3.select("#sidebar");
+
+var content = d3.select("#content");
+
+var w, h, boxw = 100, boxh = 40;
 
 calc();
-
-//a flag so that we don't zoom when double clicking nodes
-var _on_node = false;
-
 // Deal with panning and zooming
 var zoom = d3.behavior.zoom()
     .size([w,h])
     .scaleExtent([.25,2])
     .on("zoom", zoomed); 
 
-//Defines what happens when dragging around nodes
-var drag = d3.behavior.drag()
-    .origin(function(d) { return d; })
-    .on("dragstart", dragstart)
-    .on("drag", dragged)
-    .on("dragend", dragend);
-
-var svg = d3.select("body").append("svg")
+var svg = content
+    .append("svg")
     .attr("width", w)
     .attr("height", h)
     .call(zoom)
+    .on("click", remove_contextmenu)
     .on("dblclick.zoom", null); //for now: disable double clicking entirely
 
-
 var rect = svg.append("rect")
-    .attr("width", w)
-    .attr("height", h)
-    .style("fill", "none")
-    .style("pointer-events", "all");
+    .attr("id", "mousecapture")
+    .attr("width", "100%")
+    .attr("height", "100%");
 
 //the <g> tag containing the whole visualization. This gets zoomed and panned
 var vis = svg.append("g");
@@ -93,6 +110,23 @@ var vis = svg.append("g");
 //do this so that nodes will always render on top of links
 vis.append("g").attr("id", "links");
 vis.append("g").attr("id", "nodes");
+
+vis.append("g").attr("id", "contextmenu");
+
+
+calc();
+set_sizes();
+
+//a flag so that we don't zoom when double clicking nodes
+var _on_node = false;
+
+
+//Defines what happens when dragging around nodes
+var drag = d3.behavior.drag()
+    .origin(function(d) { return d; })
+    .on("dragstart", dragstart)
+    .on("drag", dragged)
+    .on("dragend", dragend);
 
 //set the force layout to be centered in the screen
 zoom.translate([w/2, h/2]);
@@ -109,10 +143,18 @@ var force = d3.layout.force()
 // called anytime the user zooms or pans
 function zoomed(d) {
     //if we got here because a node was double clicked, don't do anything
+    /*if (d3.event.sourceEvent && d3.event.sourceEvent.defaultPrevented) {
+        console.log('prevented');
+    }
+    console.log('zoomed')
+    console.log(d3.event)
     if (_on_node) {
         _on_node = false;
         return;
-    }
+    }*/
+    //console.log(d3.event);
+    remove_contextmenu();
+    if (d3.event.sourceEvent && d3.event.sourceEvent.which != 1) { return; }
     trans = d3.event.translate;
     scale = d3.event.scale;
     x=trans[0];
@@ -125,6 +167,9 @@ function zoomed(d) {
 };
 
 function dragstart(d) {
+    remove_contextmenu();
+    real_drag = d3.event.sourceEvent.which == 1;
+    if (!real_drag) { return; }
     d3.event.sourceEvent.stopPropagation();
     force.stop();
     d3.select(this).classed("fixed", d.fixed = true);
@@ -135,92 +180,67 @@ function dragstart(d) {
 //This is needed to make sure that the layout updates correctly while dragging.
 //Just calling tick() causes problems
 function dragged(d) {
+    if (!real_drag) { return; }
     d.px += d3.event.dx;
     d.py += d3.event.dy;
     d.x += d3.event.dx;
     d.y += d3.event.dy;
     tick();
-    
-    //addition: if node is dragged off screen, call zoom.translate; zoom.event
 };
 
 function dragend(d) {
+    if (!real_drag) { return; }
     d3.select(this).classed("dragging", false);
     force.resume();
-    tick();
+    //tick();
 };
 
 function dblclick(d) {
-    _on_node = true;
+    /*_on_node = true;
     d3.event.preventDefault();
+    console.log('bdlclick');*/
     d3.select(this).classed("fixed", d.fixed = false);
 }
 
 //These are the nodes and links which existed before the json arrived
 //This allows us to keep track of the links that were already in the layout (especially their positions)
-var existing_nodes = [];
-var existing_links = [];
+var present_nodes = [];
+var present_links = [];
+
+var link;
+var node;
 
 //when we get a new network topology, process it
-function network(json) {
+function handle_network(json) {
+
+    mininet = json.mininet;
 
     //Update json.links and json.nodes:
-    //If a link/node is already in existing_links/nodes (i.e. it was in the layout already),
+    //If a link/node is already in present_links/nodes (i.e. it was in the layout already),
     //change its entry in json.links/nodes to point to the existing object, rather than the one
     //that was created when the new JSON came in
 
-    //Currently differentiates objects by name, but this should probably change
-
-    function copy_d3_props(from, to) {
-        to.index = from.index;
-        to.x = from.x;
-        to.y = from.y;
-        to.px = from.px;
-        to.py = from.py;
-        to.fixed = from.fixed;
-        to.weight = from.weight;
-    }
-
-    function copy_not_d3_props(from, to) {
-        for (prop in from) {
-            to[prop] = from[prop];
+    function update_json(json_elements, present_elements) {
+        present_names = {}
+        for (i = 0; i < present_elements.length; i++) {
+            name = present_elements[i].name;
+            present_names[name] = present_elements[i];
+        }
+        for (i=0; i < json_elements.length; i++) {
+            name = json_elements[i].name;
+            if (name in present_names) {
+                $.extend(true, present_names[name], json_elements[i]);
+                json_elements[i] = present_names[name];
+            }
         }
     }
 
-    ex_link_ids = Object();
-    existing_links.forEach(
-        function(val, ind) {
-            ex_link_ids[val.id] = val;
-        }
-    );
+    update_json(json.links, present_links);
+    update_json(json.nodes, present_nodes);
 
-    for (i = 0; i < json.links.length; i++) {
-        id = json.links[i].id;
-        if (id in ex_link_ids) {
-            copy_not_d3_props(json.links[i], ex_link_ids[id]);
-            json.links[i] = ex_link_ids[id];
-            //copy_d3_props(ex_link_ids[id], json.links[i]);
-        }
-    }
-    
-    ex_node_ids = Object();
-    existing_nodes.forEach(
-        function(val, ind) {
-            ex_node_ids[val.id] = val;
-        }
-    );
-
-    for (i = 0; i < json.nodes.length; i++) {
-        id = json.nodes[i].id;
-        if (id in ex_node_ids) {
-            copy_not_d3_props(json.nodes[i], ex_node_ids[id]);
-            json.nodes[i] = ex_node_ids[id];
-            //copy_d3_props(ex_node_ids[id], json.nodes[i]);
-        }
-    }
 
     linkgroup = vis.select("#links").selectAll(".linkgroup")
-        .data(json.links, function(d) { return d.id;});
+        .data(json.links, function(d) { return d.name;});
 
     linkgroup
         .select("line")
@@ -230,9 +250,9 @@ function network(json) {
         .exit()
         .remove()
         .each(function(d) {
-            for (i = 0; i < existing_links.length; i++) {
-                if (existing_links[i].id == d.id) {
-                    existing_links.splice(i, 1);
+            for (i = 0; i < present_links.length; i++) {
+                if (present_links[i].name == d.name) {
+                    present_links.splice(i, 1);
                 }
             }
         });
@@ -241,29 +261,38 @@ function network(json) {
         .enter()
         .insert("g")
         .attr("class", "linkgroup")
-        .each(function(d) { existing_links.push(d); });
+        .on("contextmenu", link_contextmenu)
+        .each(function(d) { present_links.push(d); });
         
     link.append("svg:line")
         .attr("class", function(d) { return "link " + d.status; })
-        .style("stroke-width", 5)
         .attr("x1", function(d) { return d.source.x; })
         .attr("y1", function(d) { return d.source.y; })
         .attr("x2", function(d) { return d.target.x; })
-        .attr("y2", function(d) { return d.target.y; });
+        .attr("y2", function(d) { return d.target.y; })
+        .classed("low_bandwidth", function(d) { return d.bandwidth == 'low'; })
+        .classed("med_bandwidth", function(d) { return d.bandwidth == 'med'; })
+        .classed("high_bandwidth", function(d) { return d.bandwidth == 'high'; });
 
     link.append("text")
-        .text(function(d) { return d.name; });
+        .text(function(d) { return d.name; })
+        .attr("dy", "-.33em")
+        .classed("link-name", true);
+    
+    link.append("text")
+        .attr("dy", "1em")
+        .classed("link-stats", true);
 
     nodegroup = vis.select("#nodes").selectAll(".nodegroup")
-        .data(json.nodes, function(d) { return d.id;});
+        .data(json.nodes, function(d) { return d.name;});
     
     nodegroup
         .exit()
         .remove()
         .each(function(d) {
-            for (i = 0; i < existing_nodes.length; i++) {
-                if (existing_nodes[i].id == d.id) {
-                    existing_nodes.splice(i, 1);
+            for (i = 0; i < present_nodes.length; i++) {
+                if (present_nodes[i].name == d.name) {
+                    present_nodes.splice(i, 1);
                 }
             }
         });
@@ -273,14 +302,19 @@ function network(json) {
         .insert("g")
         .attr("class", "nodegroup")
         .on("dblclick", dblclick, true)
-        /*.on("contextmenu", function(data, index)  {
-            console.log("context click! Data: " + data + " index: "+index);
-            d3.event.preventDefault();
-            d3.event.sourceEvent.stopPropogation();
-        })*/
+        .on("contextmenu", node_contextmenu)
         //.on("contextmenu.drag", function() {console.log("context drag"); d3.event.sourceEvent.stopPropogation(); })
         .call(drag)
-        .each(function(d) { existing_nodes.push(d); });
+        .on("click",
+                function(d,i) {
+                    remove_contextmenu();
+                    d3.selectAll(".selected").classed("selected", false);
+                    d3.select(this).classed("selected", true);
+                })
+        .each(function(d) { present_nodes.push(d); });
+
+        //doubleclick: select
+        //ctrl click: unfreeze
 
     node.append("svg:rect")
         .attr("class", function(d) { return "node " + d.node_type; })
@@ -289,14 +323,10 @@ function network(json) {
         .attr("x", -boxw / 2)
         .attr("y", -boxh / 2)
         .attr("rx", 5)
-        .attr("ry", 5)
-        .style("cursor", "move")
+        .attr("ry", 5);
 
     node.append("text")
         .text(function(d) { return d.name; })
-        .style("text-anchor", "middle")
-        .style("dominant-baseline", "middle")
-        .style("cursor", "move")
         .attr("x", function(d) { return (0); })
         .attr("y", function(d) { return (0); });
 
@@ -319,33 +349,84 @@ function network(json) {
             }
         });
     }
-}
-
-function update(json) {
-    update_type = json['update_type'];
-    switch(json.update_type) {
-        case undefined:
-            console.log('update_type undefined. What are you updating?');
-            break;
-        case 'node':
-            break;
+    present_node_names = {};
+    for (i = 0; i < present_nodes.length; i++) {
+        name = present_nodes[i].name;
+        present_node_names[name] = present_nodes[i];
+    }
+    present_link_names = {};
+    for (i = 0; i < present_links.length; i++) {
+        name = present_links[i].name;
+        present_link_names[name] = present_links[i];
     }
 
+    port_map = {}; // { switch : {port : link } }
+    for (i = 0; i< present_links.length; i++) {
+        ln = present_links[i];
+        source_sw = ln.source.pyretic_switch_num;
+        source_port = ln.source_port;
+        target_sw = ln.target.pyretic_switch_num;
+        target_port = ln.target_port;
+
+        if (!port_map[source_sw]) { port_map[source_sw] = {}; }
+        if (!port_map[target_sw]) { port_map[target_sw] = {}; }
+        port_map[source_sw][source_port] = [ln, 'source'];
+        port_map[target_sw][target_port] = [ln, 'target'];
+    }
+}
+
+function handle_packet(json) {
+    //name = 's' + json['switch'];
+    //other = present_node_names[name].ports[json['inport']];
+    //console.log("packet from " + other + " to " + name);
+}
+
+function handle_port_stats_reply(json) {
+    for (i = 0; i < present_links.length; i++) {
+        ln = present_links[i];
+        ln.packets_to_source = 0;
+        ln.packets_from_source = 0;
+        ln.packets_to_target = 0;
+        ln.packets_from_target = 0;
+    }
+    for (sw_num in json.counts) {
+        sw = json.counts[sw_num];
+        console.log(sw);
+        for (port_num in sw) {
+            console.log(port_num);
+            //get the link associated with this port on this switch
+            this_link = port_map[sw_num][port_num][0];
+            src_tgt = port_map[sw_num][port_num][1];
+            pkts = sw[port_num];
+            if (src_tgt == 'source') {
+                this_link.packets_to_source = pkts[0];
+                this_link.packets_from_source = pkts[1];
+            } else if (src_tgt == 'target') {
+                this_link.packets_to_target = pkts[0];
+                this_link.packets_from_target = pkts[1];
+            }
+        }
+    }
+    d3.selectAll(".linkgroup").select(".link-stats")
+        .text(
+            function(d) {
+                return 'To ' + d.source.name + ': [' + d.packets_from_target + ', ' + d.packets_to_source + 
+                    '] To ' + d.target.name + ': [' + d.packets_from_source + ', ' + d.packets_to_target + ']';
+            });
+    d3.selectAll(".linkgroup").select(".link")
+        .each(function (d) { d.avg_packets = (d.packets_from_target + d.packets_to_source + 
+                    d.packets_from_source + d.packets_to_target) / 4; })
+        .classed("low_util", function (d) { return d.avg_packets <= 100; })
+        .classed("med_util", function (d) { return d.avg_packets > 100 && d.avg_packets <= 500; })
+        .classed("high_util", function (d) { return d.avg_packets > 500; });
+}
+
+function handle_flow_stats_reply(json) {
+    return;
 }
 
 function tick() {
-    //k = 60 * e.alpha;
-
-    /*node.forEach(function(d, i) {
-        d.y += d.node_type === "switch" ? k : -k;
-    });*/
-
     a=force.alpha();
-
-    json.links.forEach(function(d,i) {
-        //d.source.y -= 10 * a;
-        //d.target.y += 10 * a;
-    });
 
     linkgroup.select("line")
         .attr("x1", function(d) { return d.source.x; })
@@ -353,8 +434,7 @@ function tick() {
         .attr("x2", function(d) { return d.target.x; })
         .attr("y2", function(d) { return d.target.y; });
 
-    linkgroup.select("text")
-        .style("text-anchor", "middle")
+    linkgroup.selectAll("text")
         .attr("x", function(d) { return (d.source.x + d.target.x)/2;})
         .attr("y", function(d) { return (d.source.y + d.target.y)/2;})
         .attr("transform", function(d) {
@@ -370,19 +450,121 @@ function tick() {
         .attr("transform", function (d) { return "translate(" + d.x + ", " + d.y + ")"; });
 }
 
+
+function node_contextmenu(d, i) {
+    x = d3.mouse(this)[0] + d.x;
+    y = d3.mouse(this)[1] + d.y;
+    return contextmenu(d, i, [x,y], node_context_options, this);
+}
+
+function link_contextmenu(d, i) {
+    return contextmenu(d, i, d3.mouse(this), link_context_options, this);
+}
+
+function contextmenu(d, i, pos, menu_items, obj) {
+    d3.event.preventDefault();
+    d3.event.stopPropagation();
+
+    force.stop();
+
+    // Remove any other context menus
+    remove_contextmenu();
+
+    selected = d;
+
+    x = pos[0];
+    y = pos[1];
+
+    width = 80;
+
+    menu = d3.select("#contextmenu");
+
+    filtered_menu_items = menu_items.filter(function (d) { return mininet || !d.mininet_only; });
+    
+    menu_box = menu
+        .append("rect")
+        .classed("context_menu_bg", true)
+        .attr("x", x)
+        .attr("y", y)
+        .attr("height", filtered_menu_items.length + "em")
+        .attr("width", width);
+
+    menuitem = menu
+        .selectAll("g")
+        .data(filtered_menu_items)
+        .enter()
+        .append("g")
+        .classed("menuitem", true);
+
+    menuitem
+        .append("text")
+        .text(function (item) { return item.name; })
+        .attr("x", x)
+        .attr("y", y)
+        .attr("dx", "2.5px")
+        .attr("dy", function(d, i) { return (i+1) - 0.15 + "em"; }); // this just makes it look better
+    
+    menuitem.selectAll("text").each(
+            function(d,i) {
+                width = Math.max(d3.select(this).node().getBBox().width + 5, width);
+            });
+
+    menu_box.attr("width", width);
+
+    menuitem
+        .append("rect")
+        .classed("context_item_bg", true)
+        .attr("x", x)
+        .attr("y", function(d,i) { return d3.select(this.parentNode).select("text").node().getBBox().y; })
+        .attr("width", width)
+        .attr("height", function(d,i) { return d3.select(this.parentNode).select("text").node().getBBox().height; })
+        .on("mouseenter", function() { d3.select(this).classed("selected", true); })
+        .on("mouseleave", function() { d3.select(this).classed("selected", false); })
+        .on("click", function(d) { d.fn(selected); });
+
+}
+
+function remove_contextmenu() {
+    d3.selectAll("#contextmenu *")
+        .remove();
+}
+
+function link_down(link) {
+    node1 = link.source.name;
+    node2 = link.target.name;
+    ws.send('link ' + node1 + ' ' + node2 + ' down');
+}
+
+function link_up(link) {
+    node1 = link.source.name;
+    node2 = link.target.name;
+    ws.send('link ' + node1 + ' ' + node2 + ' up');
+}
+
+function node_rename(node) {
+    new_name = prompt('New name');
+    if (new_name) { ws.send('node rename ' + node.name + ' ' + new_name); }
+}
+
+function node_xterm(node) {
+    ws.send('node xterm ' + node.name);
+}
+
+function node_selected(node) {
+    ws.send('');
+}
+
 window.onresize = function () {
     calc();
-    
+    set_sizes();
+}
+
+function set_sizes() {
     svg.attr("width", w)
-        .attr("height", h);
-    
-    rect.attr("width", w)
-        .attr("height", h);
+        .attr("height", h); 
 }
 
 function calc() {
-    w = $(window).width(),
-      h = $(window).height(), 
-      boxw = 100,
-      boxh = 40;
+    w = $("#content").width();
+    h = $(window).height(); 
 }

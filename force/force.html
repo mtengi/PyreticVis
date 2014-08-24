@@ -1,13 +1,26 @@
 
 <!DOCTYPE html>
 <html>
-  <head>
-    <title>Pyretic Network Visualization</title>
-    <script type="text/javascript" charset="utf-8" src="d3.js"></script>
-    <script type="text/javascript" src="jquery-1.11.1.js"></script>
-    <link type="text/css" rel="stylesheet" href="force.css"/>
-  </head>
-  <body>
-    <script type="text/javascript" src="force.js"></script>
-  </body>
+    <head>
+        <title>Pyretic Network Visualization</title>
+        <script type="text/javascript" charset="utf-8" src="d3.js"></script>
+        <script type="text/javascript" src="jquery-1.11.1.js"></script>
+        <link type="text/css" rel="stylesheet" href="force.css"/>
+    </head>
+    <body>
+        <div id="sidebar">
+            <h2 id="nodename">No node selected</h2>
+            <h2>Ports:</h2>
+        </div>
+        <div id="divider"></div>
+        <div id="content"></div>
+        <div id="no_ws">
+            <span>
+                No connection to WebSocket :(
+                <br>
+                Is pyreticVis running?
+            </span>
+        </div>
+        <script type="text/javascript" src="force.js"></script>
+    </body>
 </html>

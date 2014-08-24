@@ -1,0 +1,124 @@
+PyreticVis - A Pyretic visualization platform
+Written by Mark Tengi (markat@princeton.edu)
+
+PyreticVis is a system for viewing and interacting with a Pyretic application
+through a GUI. It can be used during the development of an application for
+debugging, or with a deployed network for monitoring and administration.
+PyreticVis is designed to be compatible with Pyretic running on top of any
+network, though it offers special integration with Mininet. The GUI is
+presented in a web browser and communicates with Pyretic through a WebSocket,
+so it can be run on any computer, local or remote.
+
+
+* RUNNING
+The method used to run PyreticVis differs depending on whether you want to
+include Mininet integration. In both cases, you need to start the web server:
+    $ python -m SimpleHTTPServer
+from the root of the Pyretic installation. If you don't want Mininet
+integration, PyreticVis is run in exactly the same way as normal Pyretic.
+Two terminals with:
+    $ pyreticVis.py -m p0 pyretic.modules.mac_learner
+    $ mininet.sh --topo-tree,3
+would work. If you want Mininet integration, you need to specify a .gml file
+with the -t (--topo-file) option and do not need the second terminal. For the
+format of the GML file, see the GML section. You will need to do this as root,
+since Mininet requires root. You will also need to have pox in root's path. On
+the standard Mininet VM, you can do:
+    $ sudo su
+    # export HOME=/home/mininet
+    # source ~/.profile
+    # pyreticVis.py -m p0 pyretic.modules.mac_learner -t basic.gml
+
+
+* COMPONENTS
+PyreticVis consists of several pieces which work in conjunction:
+
+    * pyreticVis.py (pyreticVis.py)
+    This replaces pyretic.py, used in the normal operation of Pyretic. It
+    offers all of the same arguemnts as pyretic.py, as well as a new optional
+    -t argument for specifying a .gml file from which to build a Mininet
+    network.
+    * WebSocket Forwarder (pyretic/debug/wsforwarder.py)
+    This gets messages from the frontend to the backend, and is started
+    automatically by pyreticVis.py. See COMMUNICATION for details.
+    * Inline Mininet interface (pyretic/debug/mn.py)
+    The Mininet interface is used if the user gives pyreticVis.py the -t flag.
+    It defines some slightly modified classes for Mininet to use.
+    * VisConcreteNetwork class (pyretic/debug/visualizer.py)
+    Here we have the bulk of the PyreticVis action. We define the
+    VisConcreteNetwork class, a subclass of the standard ConcreteNetwork class,
+    and add all of our additional functionality to it.
+    * Frontend (force/)
+    The frontend is rendered in a web page and allows the user to view and
+    interact with the network.
+
+
+* BACKEND
+pyreticVis.py launches Pyretic much in the same way that pyretic.py does, but
+it uses a technique called "monkeypatching" to force Pyretic to use the
+VisConcreteNetwork (VCN) class instead of the standard ConcreteNetwork. VCN
+overrides some of the methods of the standard ConcreteNetwork class and can
+communicate with the visualization client running in a web browser. The VCN
+class has two different "modes" in which it can operate, depending on whether
+the user has given the -t flag. If so, VCN communicates with Mininet directly
+and allows the user to do some Mininet-specific actions through the GUI, such
+as bringing links up and down or launching xterms on nodes. If not, the options
+provided to the user are far more limited, as Pyretic is the only interface to
+the network and VCN can only use those features that Pyretic makes available.
+
+
+* FRONTEND
+The visualization frontend is a webpage running some Javascript. It uses the D3
+library (http://d3js.org/) to actually render the network, which is modeled as
+a Force layout (https://github.com/mbostock/d3/wiki/Force-Layout). force.css
+defines the style, including the colors of links and nodes based on classes set
+by the Javascript. When the page is loaded, it sends a request to the backend
+(via the forwarding server, see COMMUNICATION) asking for the current state of
+the network. If the server is down or ever goes down, the frontend tries to
+reconnect every 5 seconds. The user may interact with nodes and links through a
+right-click menu.  Each option is mapped to a function which is passed the node
+or link as an argument; these functions send messages to Pyretic through the
+WebSocket.
+
+* COMMUNICATION
+As stated elsewhere, the backend and frontend communicate through a Websocket
+forwarding server. This server is very simple; it has two clients (the
+visualization frontend and the Pyretic backend) and simply forwards messages
+that it receives from one client to the other client. This model was used
+because both the frontend and backend need to asynchronously send and receive
+messages. Thus, neither end is really a "server" in the traditional
+client-server model. In addition, the existing WebSocket server libraries only
+support reacting to incoming messages and do not allow the server to initiate
+communication. The messages themselves are rather rudimentary. The backend
+sends JSON to the frontend, while the frontend just sends plain text strings to
+the backend. If messages from the frontend become more complex, JSON could be
+used.
+
+* ADDING NEW FEATURES
+There are several steps on both the frontend and backend involved in adding new
+features to the GUI:
+    1.  Write a frontend function which sends a message to the backend through
+    the WebSocket. Give the user some way to call this function. If this is
+    going to be an option in a node or link dropdown menu, add an item to the
+    appropriate node/link_context_options array.
+    2.  Modify VisConcreteNetwork's process_message() function to recognize and
+    properly handle the message. The handling will likely be done through (#3).
+    3.  Write a backend function that will handle the contents of the message
+    and optionally send a reply back to the frontend. The reply message must be
+    JSON formatted; if the contents is in a dictionary d, something like:
+        self.send_to_ws(json.dumps(d))
+    will work. Before calling this, though, make sure to add a 'message_type'
+    field to the dictionary so that it can be recognized by the Javascript
+    parser.
+    4.  Modify the Javascript process_message() function to recognize the new
+    message_type, and point it to a function that handles the reply.
+
+
+* GML
+pyreticVis.py's -t option takes a .gml file as an argument. Nodes and edges can
+both have arbitrary properties stored on them, but there are several
+requirements. Each node must have a unique 'id', as well as an 'isSwitch'
+field. Currently a 'name' field is not allowed for nodes, as it clashes with an
+internal variable. Edges must have a 'source' and a 'target' whose values are
+both ids of nodes, and can also have a 'bandwidth' field with a value of 'low',
+'med', or 'high'. See basic.gml for an example.

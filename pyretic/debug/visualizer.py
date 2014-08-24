@@ -6,10 +6,28 @@ import socket
 import threading
 import logging
 import time
+import re
 from pyretic.debug.wsforwarder import *
+from mininet.term import makeTerms
+from pyretic.lib.corelib import *
+from pyretic.lib.std import *
+from pyretic.lib.query import *
+from pprint import pprint
 
 WS_URL = 'ws://localhost:%d%s' % (WS_PORT, WS_PATH)
 
+
+class VisCountBucket(CountBucket):
+    def handle_flow_stats_reply(self, switch, flow_stats_reply):
+        print 'FSR for %s' % switch
+        pprint(flow_stats_reply)
+
+    def register_vcn(self, vcn):
+        self.vcn = vcn
+        vcn.cb = self
+
+
+#TODO: can this nonsense be replaced with GMLTopo and GMLLink?
 class Link(object):
     def __init__(self, net, node1, port1, node2, port2, status = 'up', name =
             None, uid = None, **props):
@@ -28,6 +46,10 @@ class Link(object):
 
         self.net = net
         self.net.links[self.get_prop('id')] = self
+        self.net.ports.setdefault(node1, {})
+        self.net.ports.setdefault(node2, {})
+        self.net.ports[node1][port1] = node2
+        self.net.ports[node2][port2] = node1
 
     def up(self):
         self.set_prop('status', 'up')
@@ -117,7 +139,7 @@ class Node(object):
             self.ports.pop(port_no)
             # If we're no longer connected to anything, remove ourself
             # This is probably not the right thing to do. What if we want isolated node?
-            if len(self.ports) == 0:
+            if len(self.ports) == 0 and self.is_host():
                 self.remove_self()
         else:
             self.ports[port_no] = link
@@ -176,6 +198,15 @@ class Network(object):
 
         self.props = props
 
+        # ports[n1][port] is n2 connected to n1's port
+        self.ports = {}
+
+    def copy(self):
+        new = Network(**self.props.copy())
+        new.nodes = self.nodes.copy()
+        new.links = self.links.copy()
+        return new
+
     def get_node(self, uid):
         return self.nodes.get(uid)
 
@@ -201,9 +232,12 @@ class Network(object):
         for link in self.links.values():
             link_dict = link.get_props()
             source, target = [node for node,port in link.ends]
-            link_dict['source'] = nodes_with_indices[source]
-            link_dict['target'] = nodes_with_indices[target]
-            links.append(link_dict)
+            try:
+                link_dict['source'] = nodes_with_indices[source]
+                link_dict['target'] = nodes_with_indices[target]
+                links.append(link_dict)
+            except:
+                print "either source %s or target %s doesn't exist" % (source, target)
 
         graph = vars(self)
         graph = [] # for now. Not sure how to format in node-link
@@ -211,7 +245,6 @@ class Network(object):
         return {'links': links, 'nodes': [node.get_props() for node in nodes], 'graph': graph}
 
     def to_nx_graph(self):
-        print self.to_node_link()
         return json_graph.node_link_graph(self.to_node_link(), multigraph = False)
 
 
@@ -226,8 +259,9 @@ from pyretic.core.runtime import ConcreteNetwork
 #newest idea: merge visualizer functionality into this class. this will just make everything easier
 
 
-# TODO: instead of doing try/except in all of the Network stuff, use next_network type scheme
-# changes are added to the upcoming network, and then something in queue_update transitions the network. Not sure on the details...
+# TODO: instead of doing try/except in all of the Network stuff, use
+# next_network type scheme changes are added to the upcoming network, and then
+# something in queue_update transitions the network. Not sure on the details...
 class VisConcreteNetwork(ConcreteNetwork):
     def __init__(self, runtime=None):
         
@@ -247,20 +281,15 @@ class VisConcreteNetwork(ConcreteNetwork):
         # The WebScoket over which we'll communicate with the browser
         self.ws = self.connect()
 
-        # Maintain a list of actions to take. This will be flushed in queue_update, so our
-        # companion data stays synchronized with the Topology
-        self.updates = []
-
-        # TODO: implement mininet connectivity
-        # this is constructor, but file doesn't get added until after constructor.
-        # maybe check for it later?
-        try:
-            self.topo_file = self.runtime.topo_file
-        except:
-            pass
-        self.mininet = False
+        self.mininet = None
 
         self.net = Network(option1 = True)
+        self.next_net = self.net.copy()
+
+        self.network_lock = threading.Lock()
+
+        # Keep track of how many packets we see on each port of each node
+        self.packet_counts = {}
 
 
         # Continually read from the WebSocket.
@@ -280,6 +309,16 @@ class VisConcreteNetwork(ConcreteNetwork):
         self.thread.daemon = True
         self.thread.start()
 
+    # If pyreticVis.py was called with the -t switch, this will let us interact with the Mininet instance
+    def register_mininet(self, net):
+        self.mininet = net
+
+    # Shut down cleanly
+    def stop(self):
+        if self.mininet:
+            print "stopping Mininet"
+            self.mininet.stop()
+
     # Connect to the websocket forwarder
     def connect(self):
         try:
@@ -292,12 +331,19 @@ class VisConcreteNetwork(ConcreteNetwork):
             return None
 
     # Process incoming messages
+    # TODO: break this out into a dictionary where the key is the string (or
+    # start of the string) and the value is the function to run, given the
+    # entire msg
     def process_message(self, msg):
         if msg == 'current_network':
-            if self.mininet:
-                pass
-            else:
-                self.send_network()
+            self.send_network()
+        elif msg.startswith('link '):
+            self.mininet.configLinkStatus( *msg.split()[1:] )
+        elif msg.startswith('node xterm'):
+            node = self.mininet[msg.split()[-1]]
+            self.mininet.terms += makeTerms([node], term = 'xterm')
+        elif msg == 'port_stats_request':
+            self.handle_port_stats_request()
         else:
             self.log.warn('Unrecognized message from browser: %s' % msg)
 
@@ -310,9 +356,49 @@ class VisConcreteNetwork(ConcreteNetwork):
         self.ws.send(msg)
 
     def send_network(self):
-        d = json_graph.node_link_data(self.net.to_nx_graph())
+        if self.mininet:
+            d = json_graph.node_link_data(self.mininet_to_nx_graph())
+        else:
+            d = json_graph.node_link_data(self.net.to_nx_graph())
         d['message_type'] = 'network'
+        d['mininet'] = bool(self.mininet)
         self.send_to_ws(json.dumps(d))
+
+
+    def handle_pkt(self, pkt):
+        sw = pkt.header['switch']
+        inport = pkt.header['inport']
+        evald = self.orig_policy.eval(pkt)
+        outports = [p.header['outport'] for p in evald]
+
+        self.packet_counts.setdefault(sw, {})
+        self.packet_counts[sw].setdefault(inport, [0,0]) # [pkts in, pkts out]
+        self.packet_counts[sw][inport][0] += 1
+        for outport in outports:
+            self.packet_counts[sw].setdefault(outport, [0,0])
+            self.packet_counts[sw][outport][1] += 1
+
+        pkt_info = {}
+        pkt_info['switch'] = pkt.header['switch']
+        pkt_info['inport'] = pkt.header['inport']
+        pkt_info['outports'] = outports
+        pkt_info['message_type'] = 'packet'
+
+        #info = {k:repr(v) for k,v in pkt.header.iteritems() if not k == 'raw'}
+        #info = {'switch': repr(pkt.header['switch']), 'port': repr(pkt.header['port'])}
+        #info['message_type'] = 'packet'
+
+        # determine which link (since frontend doesn't know about ports. Should it?
+        #self.send_to_ws(json.dumps(pkt_info))
+
+    def handle_port_stats_request(self):
+        reply = {'message_type': 'port_stats_reply'}
+        reply['counts'] = self.packet_counts
+        self.send_to_ws(json.dumps(reply))
+        self.packet_counts = {}
+        print 'pulling stats'
+        self.cb.pull_stats()
+        self.runtime.pull_stats_for_bucket(self.cb)()
 
     # This should be used to transition to next network
     # Also has to push changes to browser
@@ -325,6 +411,7 @@ class VisConcreteNetwork(ConcreteNetwork):
 
             self.topology = self.next_topo.copy()
             self.runtime.handle_network_change()
+            self.handle_network_change()
             self.send_network()
 
         p = threading.Thread(target=f,args=(this_update_no,))
@@ -341,33 +428,45 @@ class VisConcreteNetwork(ConcreteNetwork):
     # Make a new Node
     def handle_switch_join(self, switch, **kwargs):
         super(VisConcreteNetwork,self).handle_switch_join(switch)
-        Node(self.net, uid = switch)
         print 'handle switch join: %d' % switch
+
+        Node(self.net, uid = switch)
 
     def handle_switch_part(self, switch):
         super(VisConcreteNetwork,self).handle_switch_part(switch)
-        self.net.get_node(switch).remove_self()
         print 'handle switch part: %d' % switch
+
+        self.net.get_node(switch).remove_self()
 
     # When a port comes up, we can assume that it's connected to a host (not
     # tracked by Pyretic)
     # TODO: figure out how to get mininet's host number (probably related to order brought up)
     def handle_port_join(self, switch, port_no, config, status):
         super(VisConcreteNetwork,self).handle_port_join(switch, port_no, config, status)
+        print 'handle port join: %d %d %s %s' % (switch, port_no, config, status)
+
         node1 = Node(self.net, node_type = 'host')
         node2 = self.net.get_node(switch)
         Link(self.net, node1, 0, node2, port_no)
-        print 'handle port join: %d %d %s %s' % (switch, port_no, config, status)
 
     def handle_port_part(self, switch, port_no):
         super(VisConcreteNetwork,self).handle_port_part(switch, port_no)
-        self.net.get_node(switch).port_part(port_no)
         print 'handle port part: %d %d' % (switch, port_no)
+
+        self.net.get_node(switch).port_part(port_no)
 
     # This is called when bringing ports up and down. Use this for host up/down
     def handle_port_mod(self, switch, port_no, config, status):
         super(VisConcreteNetwork,self).handle_port_mod(switch, port_no, config, status)
         print 'handle port mod: %d %d %s %s' % (switch, port_no, config, status)
+
+        if config and status:
+            try:
+                node = self.net.get_node(switch)
+                link = node.get_port(port_no)
+                link.up()
+            except: # link doesn't exist yet
+                pass
 
     def port_up(self, switch, port_no):
         super(VisConcreteNetwork,self).port_up(switch, port_no)
@@ -376,41 +475,73 @@ class VisConcreteNetwork(ConcreteNetwork):
     # Called when bringing link down
     def port_down(self, switch, port_no, double_check=False):
         super(VisConcreteNetwork,self).port_down(switch, port_no, double_check)
-        if not double_check:
-            self.net.get_node(switch).port_down(port_no)
         print 'port down: %d %d %s' % (switch, port_no, double_check)
 
-    # Called when a link comes up. Delete the assumed hosts (TODO actually implement deletion)
+        if not double_check:
+            self.net.get_node(switch).port_down(port_no)
+
+    # Called when a link comes up between two switches. Delete the assumed hosts (TODO actually implement deletion)
     def handle_link_update(self, s1, p_no1, s2, p_no2):
         super(VisConcreteNetwork,self).handle_link_update(s1, p_no1, s2, p_no2)
-        if self.net.get_node(s1) and self.net.get_node(s1).is_host():
-            pass #delete
-        Link(self.net, self.net.get_node(s1), p_no1, self.net.get_node(s2), p_no2)
         print 'handle link update: %d %d %d %d' % (s1, p_no1, s2, p_no2)
 
+        # This doesn't do anything since these will never be hosts
+        if self.net.get_node(s1) and self.net.get_node(s1).is_host():
+            self.net.get_node(s1).remove_self()
+        
+        if self.net.get_node(s2) and self.net.get_node(s2).is_host():
+            self.net.get_node(s2).remove_self()
+        Link(self.net, self.net.get_node(s1), p_no1, self.net.get_node(s2), p_no2)
 
-    # Construct a graph using our customized nodes and edges
-    def build_from(self, topo):
-        g = nx.Graph()
-        for n in topo.node:
-            g.add_node(n, name = 'Switch %s' % n, node_type = 'switch')
-            for p in topo.node[n]['ports']:
-                port = topo.node[n]['ports'][p]
+    # Figure out what's changed since the last update
+    # Probably need locks and stuff
+    def handle_network_change(self):
+        with self.network_lock:
+            #self.net = self.next_net
+            self.next_net = self.net.copy()
 
-                portname = "%s[%s]" % (n, port.port_no)
-                
-                if port.definitely_down(): #dead link
-                    dead_link_node = '%s_X' % portname
-                    g.add_node(dead_link_node, name = dead_link_node, node_type = 'dead')
-                    g.add_edge(dead_link_node, n, name = "%s <--> X" % portname)
 
-                elif port.linked_to: #link to another switch
-                    link_title = '%s[%s] <--> %s' % (port.linked_to.switch, port.linked_to.port_no, portname)
-                    g.add_edge(n, port.linked_to.switch, name = link_title)
+    def mininet_to_nx_graph(self):
+        if not self.mininet:
+            return
 
-                else: #egress link
-                    egress_node = '%s_egress' % portname
-                    g.add_node(egress_node, name = egress_node, node_type = 'egress')
-                    g.add_edge(egress_node, n, name = "%s <--> Outside" % portname)
-        return g
+        topo = self.mininet.topo
+        mn = self.mininet
 
+        def to_node_link():
+            graph = []
+
+            nodes = topo.nodes()
+            
+            # Each node needs an index 
+            nodes_with_indices = {}
+            for index, node in enumerate(nodes):
+                nodes_with_indices[node] = index
+
+            links = []
+            for link in topo.links():
+                link_dict = topo.linkInfo(*link)
+                link_dict['source'] = nodes_with_indices[link[0]]
+                link_dict['target'] = nodes_with_indices[link[1]]
+                ports = topo.port(*link)
+                link_dict['source_port'] = ports[0]
+                link_dict['target_port'] = ports[1]
+                src_intf = mn.link.intfName(mn.get(link[0]), ports[0])
+                dst_intf = mn.link.intfName(mn.get(link[1]), ports[1])
+                link_dict['status'] = 'up' if \
+                            (mn.get(link[0]).intfIsUp(src_intf)
+                            and mn.get(link[1]).intfIsUp(dst_intf)) else 'down'
+                link_dict['name'] = '%s:%s' % (src_intf, dst_intf)
+                links.append(link_dict)
+
+            nodes_with_info = []
+            for node in nodes:
+                node_dict = topo.nodeInfo(node)
+                node_dict['node_type'] = 'switch' if topo.isSwitch(node) else 'host'
+                node_dict['name'] = node
+                node_dict['ports'] = {v:k for k,v in topo.ports[node].iteritems()} # only gets first letter of k when not iteritems. weird...
+                nodes_with_info.append(node_dict)
+
+            return {'links': links, 'nodes': nodes_with_info, 'graph': graph}
+
+        return json_graph.node_link_graph(to_node_link(), multigraph = False, directed=True)
