@@ -215,10 +215,8 @@ def main():
     # Every packet through the network will be pushed to the handle_pkt function
     fwd.register_callback(network.handle_pkt)
     
-    cb.register_vcn(network)
-    network.orig_policy = given_pol
-
-    print runtime.policy.compile()
+    network.register_bucket(cb)
+    network.register_policy(given_pol)
 
     if not options.frontend_only:
         try:

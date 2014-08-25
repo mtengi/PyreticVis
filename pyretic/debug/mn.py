@@ -15,26 +15,12 @@ class GMLTopo(Topo):
         g = networkx.read_gml(filename)
         for i in g.nodes():
             node = g.node[i]
-                            
             # change the name so that we don't try to give a switch MAC address 0
             # TODO: use actual name if given
             self.addNode(str(i), **node)
 
         for n1,n2,data in g.edges(data=True):
             self.addLink(str(n1),str(n2),**data) #add info
-
-
-        pyretic_switches = 1
-        for sw in self.switches():
-            curr_info = self.nodeInfo(sw)
-            curr_info['pyretic_switch_num'] = pyretic_switches #this is wrong. Not ordered
-            pyretic_switches += 1
-            self.setNodeInfo(sw, curr_info)
-
-        for h in self.hosts():
-            curr_info = self.nodeInfo(h)
-            curr_info['pyretic_switch_num'] = 0
-            self.setNodeInfo(h, curr_info)
 
 
     def addPort(self, src, dst, sport=None, dport=None):

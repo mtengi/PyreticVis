@@ -9,6 +9,7 @@
 var ws;
 var mininet = false;
 var interval = 0;
+var flow_stats = {};
 
 $('document').ready(connect);
 
@@ -27,7 +28,8 @@ function connect() {
         d3.select("#no_ws").attr("hidden", '');
         ws.send('current_network');
         ws.send('port_stats_request');
-        interval = setInterval(function() {ws.send('port_stats_request');}, 2000);
+        ws.send('flow_stats_request');
+        interval = setInterval(function() {ws.send('port_stats_request'); ws.send('flow_stats_request'); }, 5000);
     };
 
     ws.onclose = function () {
@@ -52,6 +54,9 @@ function process_message(json) {
         case 'port_stats_reply':
             handle_port_stats_reply(json);
             break;
+        case 'flow_stats_reply':
+            handle_flow_stats_reply(json);
+            break;
         default:
             console.log('WARNING: Unrecognized message_type: ' + json.message_type + '. Discarding message');
             break;
@@ -65,8 +70,7 @@ d3.selection.prototype.moveToFront = function() {
     }); 
 };
 
-link_context_options =
-[
+link_context_options =[
     { name : 'Bring down', fn : link_down, mininet_only : true },
     { name : 'Bring up', fn : link_up, mininet_only : true },
 ]
@@ -167,6 +171,7 @@ function zoomed(d) {
 };
 
 function dragstart(d) {
+    console.log('dragstart');
     remove_contextmenu();
     real_drag = d3.event.sourceEvent.which == 1;
     if (!real_drag) { return; }
@@ -244,7 +249,9 @@ function handle_network(json) {
 
     linkgroup
         .select("line")
-        .attr("class", function(d) { return "link " + d.status; });
+        .classed("link", true)
+        .classed("up", function(d) { return d.status == 'up'; })
+        .classed("down", function(d) { return d.status == 'down'; });
 
     linkgroup
         .exit()
@@ -260,12 +267,14 @@ function handle_network(json) {
     link = linkgroup
         .enter()
         .insert("g")
-        .attr("class", "linkgroup")
+        .classed("linkgroup", true)
         .on("contextmenu", link_contextmenu)
         .each(function(d) { present_links.push(d); });
         
     link.append("svg:line")
-        .attr("class", function(d) { return "link " + d.status; })
+        .classed("link", true)
+        .classed("up", function(d) { return d.status == 'up'; })
+        .classed("down", function(d) { return d.status == 'down'; })
         .attr("x1", function(d) { return d.source.x; })
         .attr("y1", function(d) { return d.source.y; })
         .attr("x2", function(d) { return d.target.x; })
@@ -300,7 +309,7 @@ function handle_network(json) {
     node = nodegroup
         .enter()
         .insert("g")
-        .attr("class", "nodegroup")
+        .classed("nodegroup", true)
         .on("dblclick", dblclick, true)
         .on("contextmenu", node_contextmenu)
         //.on("contextmenu.drag", function() {console.log("context drag"); d3.event.sourceEvent.stopPropogation(); })
@@ -310,6 +319,7 @@ function handle_network(json) {
                     remove_contextmenu();
                     d3.selectAll(".selected").classed("selected", false);
                     d3.select(this).classed("selected", true);
+                    populate_sidebar();
                 })
         .each(function(d) { present_nodes.push(d); });
 
@@ -317,7 +327,9 @@ function handle_network(json) {
         //ctrl click: unfreeze
 
     node.append("svg:rect")
-        .attr("class", function(d) { return "node " + d.node_type; })
+        .classed("node", true)
+        .classed("switch", function(d) { return d.node_type == 'switch'; })
+        .classed("host", function(d) { return d.node_type == 'host'; })
         .attr("width", boxw)
         .attr("height", boxh)
         .attr("x", -boxw / 2)
@@ -363,15 +375,15 @@ function handle_network(json) {
     port_map = {}; // { switch : {port : link } }
     for (i = 0; i< present_links.length; i++) {
         ln = present_links[i];
-        source_sw = ln.source.pyretic_switch_num;
+        source_dpid = ln.source.dpid;
         source_port = ln.source_port;
-        target_sw = ln.target.pyretic_switch_num;
+        target_dpid = ln.target.dpid;
         target_port = ln.target_port;
 
-        if (!port_map[source_sw]) { port_map[source_sw] = {}; }
-        if (!port_map[target_sw]) { port_map[target_sw] = {}; }
-        port_map[source_sw][source_port] = [ln, 'source'];
-        port_map[target_sw][target_port] = [ln, 'target'];
+        if (!port_map[source_dpid]) { port_map[source_dpid] = {}; }
+        if (!port_map[target_dpid]) { port_map[target_dpid] = {}; }
+        port_map[source_dpid][source_port] = [ln, 'source'];
+        port_map[target_dpid][target_port] = [ln, 'target'];
     }
 }
 
@@ -422,7 +434,10 @@ function handle_port_stats_reply(json) {
 }
 
 function handle_flow_stats_reply(json) {
-    return;
+    sw = json.switch;
+    stats = json.flow_stats;
+    flow_stats[sw] = stats;
+    populate_sidebar();
 }
 
 function tick() {
@@ -552,6 +567,15 @@ function node_xterm(node) {
 
 function node_selected(node) {
     ws.send('');
+}
+
+function populate_sidebar() {
+    node = d3.select(".nodegroup.selected");
+    if (node.empty()) {
+        return;
+    }
+    d3.select("#nodename").text(node.datum().name);
+    d3.select("#");
 }
 
 window.onresize = function () {

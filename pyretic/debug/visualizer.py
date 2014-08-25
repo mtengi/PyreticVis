@@ -9,6 +9,7 @@ import time
 import re
 from pyretic.debug.wsforwarder import *
 from mininet.term import makeTerms
+from mininet.node import Switch
 from pyretic.lib.corelib import *
 from pyretic.lib.std import *
 from pyretic.lib.query import *
@@ -19,12 +20,10 @@ WS_URL = 'ws://localhost:%d%s' % (WS_PORT, WS_PATH)
 
 class VisCountBucket(CountBucket):
     def handle_flow_stats_reply(self, switch, flow_stats_reply):
-        print 'FSR for %s' % switch
-        pprint(flow_stats_reply)
+        self.vcn.handle_flow_stats_reply(switch, flow_stats_reply)
 
     def register_vcn(self, vcn):
         self.vcn = vcn
-        vcn.cb = self
 
 
 #TODO: can this nonsense be replaced with GMLTopo and GMLLink?
@@ -313,6 +312,13 @@ class VisConcreteNetwork(ConcreteNetwork):
     def register_mininet(self, net):
         self.mininet = net
 
+    def register_bucket(self, bucket):
+        self.bucket = bucket
+        bucket.register_vcn(self)
+
+    def register_policy(self, pol):
+        self.pol = pol
+
     # Shut down cleanly
     def stop(self):
         if self.mininet:
@@ -344,6 +350,8 @@ class VisConcreteNetwork(ConcreteNetwork):
             self.mininet.terms += makeTerms([node], term = 'xterm')
         elif msg == 'port_stats_request':
             self.handle_port_stats_request()
+        elif msg == 'flow_stats_request':
+            self.handle_flow_stats_request()
         else:
             self.log.warn('Unrecognized message from browser: %s' % msg)
 
@@ -368,7 +376,7 @@ class VisConcreteNetwork(ConcreteNetwork):
     def handle_pkt(self, pkt):
         sw = pkt.header['switch']
         inport = pkt.header['inport']
-        evald = self.orig_policy.eval(pkt)
+        evald = self.pol.eval(pkt)
         outports = [p.header['outport'] for p in evald]
 
         self.packet_counts.setdefault(sw, {})
@@ -396,9 +404,17 @@ class VisConcreteNetwork(ConcreteNetwork):
         reply['counts'] = self.packet_counts
         self.send_to_ws(json.dumps(reply))
         self.packet_counts = {}
-        print 'pulling stats'
-        self.cb.pull_stats()
-        self.runtime.pull_stats_for_bucket(self.cb)()
+
+    def handle_flow_stats_request(self):
+        self.runtime.pull_stats_for_bucket(self.bucket)()
+
+    def handle_flow_stats_reply(self, switch, flow_stats):
+        reply = {'flow_stats' : flow_stats}
+        reply['switch'] = switch
+        reply['message_type'] = 'flow_stats_reply'
+        def custom(obj):
+            return str(obj)
+        self.send_to_ws(json.dumps(reply, default=custom))
 
     # This should be used to transition to next network
     # Also has to push changes to browser
@@ -510,37 +526,38 @@ class VisConcreteNetwork(ConcreteNetwork):
 
         def to_node_link():
             graph = []
-
-            nodes = topo.nodes()
+            nodes = mn.hosts + mn.switches
             
-            # Each node needs an index 
             nodes_with_indices = {}
             for index, node in enumerate(nodes):
                 nodes_with_indices[node] = index
 
             links = []
-            for link in topo.links():
-                link_dict = topo.linkInfo(*link)
-                link_dict['source'] = nodes_with_indices[link[0]]
-                link_dict['target'] = nodes_with_indices[link[1]]
-                ports = topo.port(*link)
-                link_dict['source_port'] = ports[0]
-                link_dict['target_port'] = ports[1]
-                src_intf = mn.link.intfName(mn.get(link[0]), ports[0])
-                dst_intf = mn.link.intfName(mn.get(link[1]), ports[1])
-                link_dict['status'] = 'up' if \
-                            (mn.get(link[0]).intfIsUp(src_intf)
-                            and mn.get(link[1]).intfIsUp(dst_intf)) else 'down'
-                link_dict['name'] = '%s:%s' % (src_intf, dst_intf)
+            for link in set([intf.link for node in nodes for intf in node.intfList() if intf.link]):
+                link_dict = link.extras
+                link_dict['source'] = nodes_with_indices[link.intf1.node]
+                link_dict['target'] = nodes_with_indices[link.intf2.node]
+                link_dict['source_port'] = link.intf1.node.ports[link.intf1]
+                link_dict['target_port'] = link.intf2.node.ports[link.intf2]
+                link_dict['status'] = 'up' if link.intf1.isUp() and link.intf2.isUp() else 'down'
+                link_dict['name'] = '%s:%s' % (link.intf1.name, link.intf2.name)
                 links.append(link_dict)
 
             nodes_with_info = []
             for node in nodes:
-                node_dict = topo.nodeInfo(node)
-                node_dict['node_type'] = 'switch' if topo.isSwitch(node) else 'host'
-                node_dict['name'] = node
-                node_dict['ports'] = {v:k for k,v in topo.ports[node].iteritems()} # only gets first letter of k when not iteritems. weird...
+                node_dict = node.params
+                node_dict['node_type'] = 'switch' if isinstance(node, Switch) else 'host'
+                node_dict['name'] = node.name
+                intfs = node.intfList()
+                node_links = [intf.link for intf in intfs if intf.link]
+                ports = [intf.node.ports[intf] for intf in intfs if intf.link]
+                other_nodes = [link.intf1.node if link.intf1.node != node else link.intf2.node for link in node_links]
+                node_dict['ports'] = {}
+                for port, other_node in zip(ports, other_nodes):
+                    node_dict['ports'][port] = other_node.name
+                node_dict['dpid'] = int(node.dpid) if isinstance(node, Switch) else 0
                 nodes_with_info.append(node_dict)
+
 
             return {'links': links, 'nodes': nodes_with_info, 'graph': graph}
 
