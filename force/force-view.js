@@ -20,7 +20,7 @@ function connect() {
 
     ws.onmessage = function (event) {
         console.log(event.data);
-        if (event.data.match('^WS')) {
+        if (event.data.match('WS')) {
             process_WS_message(event.data);
         } else {
             json = jQuery.parseJSON(event.data);
@@ -30,7 +30,7 @@ function connect() {
 
     ws.onopen = function () {
         d3.select("#no_ws").attr("hidden", '');
-        ws.send('WS_CONTROL_CLIENT');
+        ws.send('WS_VIEW_CLIENT');
         ws.send('current_network');
         ws.send('port_stats_request');
         ws.send('flow_stats_request');
@@ -64,17 +64,6 @@ function process_message(json) {
             break;
         default:
             console.log('WARNING: Unrecognized message_type: ' + json.message_type + '. Discarding message');
-            break;
-    }
-}
-
-function process_WS_message(msg) {
-    switch (msg) {
-        case 'WS_NEW_VIEWER':
-            ws.send('current_network');
-            break;
-        default:
-            console.log('WARNING: Got unknown WS message: ' + msg + '. Disregarding message');
             break;
     }
 }
@@ -585,42 +574,13 @@ function node_selected(node) {
     ws.send('');
 }
 
-/* When a node is selected, update the sidebar with its info */
 function populate_sidebar() {
     node = d3.select(".nodegroup.selected");
     if (node.empty()) {
         return;
     }
-
     d3.select("#nodename").text(node.datum().name);
-    ports = [];
-    for (p in node.datum().ports) {
-        n = node.datum().ports[p];
-        ports.push({'port': p, 'node': n});
-    }
-    
-    d3.select("#portlist")
-        .selectAll("div")
-        .data(ports, function(d) { return d.port + d.node;})
-        .exit()
-        .remove();
-
-    d3.select("#portlist")
-        .selectAll("div")
-        .data(ports, function(d) { return d.port + d.node;})
-        .enter()
-        .append("div")
-        .text(function(d) { return d.port + ': ' + d.node; });
-
-    fs = flow_stats[node.datum().dpid];
-
-    d3.select("#flowstats")
-        .selectAll("div")
-        .data(fs)
-        .enter()
-        .append("div")
-        .text(function (d) { return d; });
-
+    d3.select("#");
 }
 
 window.onresize = function () {

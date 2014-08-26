@@ -36,6 +36,8 @@ class Link(object):
         self.set_prop('status', status)
         name = name or '%s[%s] <--> %s[%s]' % (node1, port1, node2, port2)
         self.set_prop('name', name)
+        self.set_prop('source_port', port1)
+        self.set_prop('target_port', port2)
 
         # The ends of the Link. Has the form [(Node, port)]
         self.ends = []
@@ -116,6 +118,7 @@ class Node(object):
         self.set_prop('node_type', node_type)
         name = name or '%s %s' %(node_type, self.get_prop('id'))
         self.set_prop('name', name)
+        self.set_prop('dpid', uid)
 
         # A dictionary of the form { port_no : Link }
         self.ports = {}
@@ -241,7 +244,16 @@ class Network(object):
         graph = vars(self)
         graph = [] # for now. Not sure how to format in node-link
 
-        return {'links': links, 'nodes': [node.get_props() for node in nodes], 'graph': graph}
+        nodes_with_info = []
+        for node in nodes:
+            node_dict = node.get_props()
+            ports, node_links = zip(*node.ports.iteritems())
+            other_nodes = [link.ends[0][0].get_prop('name') if link.ends[0][0] != node else link.ends[1][0].get_prop('name')]
+            node_dict['ports'] = zip(ports, other_nodes)
+            nodes_with_info.append(node_dict)
+
+
+        return {'links': links, 'nodes': nodes_with_info, 'graph': graph}
 
     def to_nx_graph(self):
         return json_graph.node_link_graph(self.to_node_link(), multigraph = False)
@@ -279,6 +291,7 @@ class VisConcreteNetwork(ConcreteNetwork):
 
         # The WebScoket over which we'll communicate with the browser
         self.ws = self.connect()
+        self.send_to_ws("WS_PYRETIC_CLIENT")
 
         self.mininet = None
 
@@ -501,7 +514,7 @@ class VisConcreteNetwork(ConcreteNetwork):
         super(VisConcreteNetwork,self).handle_link_update(s1, p_no1, s2, p_no2)
         print 'handle link update: %d %d %d %d' % (s1, p_no1, s2, p_no2)
 
-        # This doesn't do anything since these will never be hosts
+        # This doesn't do anything since these will never be hosts. Pyretic only knows about switches
         if self.net.get_node(s1) and self.net.get_node(s1).is_host():
             self.net.get_node(s1).remove_self()
         
@@ -521,7 +534,6 @@ class VisConcreteNetwork(ConcreteNetwork):
         if not self.mininet:
             return
 
-        topo = self.mininet.topo
         mn = self.mininet
 
         def to_node_link():
@@ -557,7 +569,6 @@ class VisConcreteNetwork(ConcreteNetwork):
                     node_dict['ports'][port] = other_node.name
                 node_dict['dpid'] = int(node.dpid) if isinstance(node, Switch) else 0
                 nodes_with_info.append(node_dict)
-
 
             return {'links': links, 'nodes': nodes_with_info, 'graph': graph}
 
