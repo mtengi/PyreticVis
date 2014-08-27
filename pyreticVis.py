@@ -206,6 +206,7 @@ def main():
     cb.add_match(identity)
 
     pol = lambda: fwd + cb + given_pol
+    #pol = lambda: cb + given_pol # Find a way to get rid of fwdbucket. Maybe count flowstats?
 
     runtime = Runtime(Backend(),pol,{},options.mode,options.verbosity)
 

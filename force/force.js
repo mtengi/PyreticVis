@@ -616,11 +616,36 @@ function populate_sidebar() {
 
     d3.select("#flowstats")
         .selectAll("div")
+        .remove();
+
+    stat = d3.select("#flowstats")
+        .selectAll("div")
         .data(fs)
         .enter()
-        .append("div")
-        .text(function (d) { return d; });
+        .append("div");
 
+    match = stat
+        .append("div")
+        .classed("match", true)
+        .text(
+                function (d) {
+                    matchstrs = []; 
+                    for (m in d.match) {
+                        matchstrs.push(m + ': ' + d.match[m]);
+                    }
+                    return matchstrs.join(', ');
+                });
+    match
+        .append("div")
+        .classed("action", true)
+        .text(
+                function (d)  {
+                    actionstrs = [];
+                    for (a in d.actions[0]) {
+                        actionstrs.push(a + ': ' + d.actions[0][a]);
+                    }
+                    return actionstrs.join(', ');
+                });
 }
 
 window.onresize = function () {
