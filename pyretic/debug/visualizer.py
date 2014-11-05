@@ -564,7 +564,7 @@ class VisConcreteNetwork(ConcreteNetwork):
                 node_dict['ports'] = {}
                 for port, other_node in zip(ports, other_nodes):
                     node_dict['ports'][port] = other_node.name
-                node_dict['dpid'] = int(node.dpid) if isinstance(node, Switch) else 0
+                node_dict['dpid'] = int(node.dpid, 16) if isinstance(node, Switch) else 0
                 nodes_with_info.append(node_dict)
 
             return {'links': links, 'nodes': nodes_with_info, 'graph': graph}

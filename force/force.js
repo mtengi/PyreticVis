@@ -452,7 +452,7 @@ function handle_port_stats_reply(json) {
                 pts = d.packets_to_source;
                 sent = Math.max(pft, pts) + Math.max(pfs, ptt);
                 dropped = Math.abs(pft - pts) + Math.abs(pfs - ptt);
-                return 'Packets sent: ' + sent + '; Dropped: ' + dropped; //approximately
+                return 'Sent: ' + sent + '; Dropped: ' + dropped; //approximately
             });
     d3.selectAll(".linkgroup").select(".link")
         .each(function (d) { d.avg_packets = (d.packets_from_target + d.packets_to_source + 
