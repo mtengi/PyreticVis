@@ -34,16 +34,15 @@ class Link(object):
         self.props = props
         self.set_prop('id', uid or id(self))
         self.set_prop('status', status)
-        name = name or '%s[%s] <--> %s[%s]' % (node1, port1, node2, port2)
+        name = name or '%s[%s]:%s[%s]' % (node1, port1, node2, port2)
         self.set_prop('name', name)
         self.set_prop('source_port', port1)
         self.set_prop('target_port', port2)
 
-        # The ends of the Link. Has the form [(Node, port)]
-        self.ends = []
-
         self._link_to(node1, port1)
+        self.source = (node1, port1)
         self._link_to(node2, port2)
+        self.target = (node2, port2)
 
         self.net = net
         self.net.links[self.get_prop('id')] = self
@@ -74,10 +73,6 @@ class Link(object):
     # If there is already a link at that port, mark it as down
     # If it is already down (i.e. the other end was disconnected), 
     def _link_to(self, node, port):
-        if len(self.ends) >= 2:
-            return None # Can't have a 3-way connection
-        
-        self.ends.append((node, port))
 
         # If there is already a link at the given port, remove it from both ends
         # because it no longer exists
@@ -90,7 +85,7 @@ class Link(object):
     # Remove this Link from both of its Nodes (presumably because it was replaced
     # at one end and and you can assume that the physical link is no longer there)
     def unlink_self(self):
-        for node, port in self.ends:
+        for node, port in [self.source, self.target]:
             node and node.set_port(port, None)
 
         try:
@@ -116,7 +111,8 @@ class Node(object):
         self.props = props
         self.set_prop('id', uid or id(self))
         self.set_prop('node_type', node_type)
-        name = name or '%s %s' %(node_type, self.get_prop('id'))
+        # host numbers won't match with those given by mininet, but they'll be short and unique
+        name = name or '%s %s' % (('switch', self.get_prop('id')) if node_type == 'switch' else ('host', self.next_host_num()))
         self.set_prop('name', name)
         self.set_prop('dpid', uid)
 
@@ -233,7 +229,8 @@ class Network(object):
         links = []
         for link in self.links.values():
             link_dict = link.get_props()
-            source, target = [node for node,port in link.ends]
+            source = link.source[0]
+            target = link.target[0]
             try:
                 link_dict['source'] = nodes_with_indices[source]
                 link_dict['target'] = nodes_with_indices[target]
@@ -248,7 +245,7 @@ class Network(object):
         for node in nodes:
             node_dict = node.get_props()
             ports, node_links = zip(*node.ports.iteritems())
-            other_nodes = [link.ends[0][0].get_prop('name') if link.ends[0][0] != node else link.ends[1][0].get_prop('name')]
+            other_nodes = [link.source[0].get_prop('name') if link.source[0] != node else link.target[0].get_prop('name') for link in node_links]
             node_dict['ports'] = zip(ports, other_nodes)
             nodes_with_info.append(node_dict)
 
@@ -256,7 +253,7 @@ class Network(object):
         return {'links': links, 'nodes': nodes_with_info, 'graph': graph}
 
     def to_nx_graph(self):
-        return json_graph.node_link_graph(self.to_node_link(), multigraph = False)
+        return json_graph.node_link_graph(self.to_node_link(), multigraph = False, directed = True)
 
 
 from pyretic.core.runtime import ConcreteNetwork

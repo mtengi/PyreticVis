@@ -396,6 +396,14 @@ function handle_network(json) {
         target_dpid = ln.target.dpid;
         target_port = ln.target_port;
 
+        // if we don't have mininet, hosts don't have dpids
+        if (!mininet && source_dpid == null) {
+            source_dpid = ln.source.id;
+        }
+        if (!mininet && target_dpid == null) {
+            target_dpid = ln.target.id;
+        }
+
         if (!port_map[source_dpid]) { port_map[source_dpid] = {}; }
         if (!port_map[target_dpid]) { port_map[target_dpid] = {}; }
         port_map[source_dpid][source_port] = [ln, 'source'];
@@ -419,17 +427,15 @@ function handle_port_stats_reply(json) {
     }
     for (sw_num in json.counts) {
         sw = json.counts[sw_num];
-        console.log(sw);
         for (port_num in sw) {
-            console.log(port_num);
             //get the link associated with this port on this switch
             this_link = port_map[sw_num][port_num][0];
-            src_tgt = port_map[sw_num][port_num][1];
+            src_or_tgt = port_map[sw_num][port_num][1];
             pkts = sw[port_num];
-            if (src_tgt == 'source') {
+            if (src_or_tgt == 'source') {
                 this_link.packets_to_source = pkts[0];
                 this_link.packets_from_source = pkts[1];
-            } else if (src_tgt == 'target') {
+            } else if (src_or_tgt == 'target') {
                 this_link.packets_to_target = pkts[0];
                 this_link.packets_from_target = pkts[1];
             }
@@ -438,8 +444,15 @@ function handle_port_stats_reply(json) {
     d3.selectAll(".linkgroup").select(".link-stats")
         .text(
             function(d) {
-                return 'To ' + d.source.name + ': [' + d.packets_from_target + ', ' + d.packets_to_source + 
-                    '] To ' + d.target.name + ': [' + d.packets_from_source + ', ' + d.packets_to_target + ']';
+                /*return 'To ' + d.source.name + ': [' + d.packets_from_target + ', ' + d.packets_to_source + 
+                    '] To ' + d.target.name + ': [' + d.packets_from_source + ', ' + d.packets_to_target + ']';*/
+                pft = d.packets_from_target;
+                pfs = d.packets_from_source;
+                ptt = d.packets_to_target;
+                pts = d.packets_to_source;
+                sent = Math.max(pft, pts) + Math.max(pfs, ptt);
+                dropped = Math.abs(pft - pts) + Math.abs(pfs - ptt);
+                return 'Packets sent: ' + sent + '; Dropped: ' + dropped; //approximately
             });
     d3.selectAll(".linkgroup").select(".link")
         .each(function (d) { d.avg_packets = (d.packets_from_target + d.packets_to_source + 
