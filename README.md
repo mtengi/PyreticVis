@@ -1,6 +1,11 @@
-pyreticVis.py - Adding a visualization to Pyretic
+pyreticVis.py
+==
+
+Adding a visualization to Pyretic
+--
 
 How it works:
+
 pyreticVis.py replaces pyretic.py and adds a component to Pyretic's backend
 which allows interactivity with thenetwork through a visualization in a web
 browser. It also allows a GML topology file to be specified, and will create a
@@ -8,6 +13,7 @@ mininet network based on the specified topology.
 
 
 Running:
+
 Running pyreticVis.py is very similar to running pyretic.py. There is one
 additional optional argument: -t TOPO_FILE or --topo_file=TOPO_FILE, where
 TOPO_FILE is a GML file (like those available at http://topology-zoo.org). This
@@ -25,5 +31,8 @@ communication channel with the browser.
 
 
 Dependencies:
+
 websocket-client (https://github.com/liris/websocket-client)
 tornado (http://www.tornadoweb.org/en/stable/)
+
+For more detailed information, see documentation.txt
